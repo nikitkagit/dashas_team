@@ -1,0 +1,36 @@
+{
+    "team_name": "Нёт.Ъ", 
+    "participants": [
+        {
+            "full_name": "Королёва Дарья Сергеевна",
+            "email": "d.koroleva@g.nsu.ru",
+            "telegram": "@Dasha",
+            "phone": "+79137964066",
+            "university": "НГУ",
+            "city": "Новосибирск",
+            "citizenship": "Россия"
+        },
+        {
+            "full_name": "Шакиров Наиль Ринатович",
+            "email": "n.shakirov@g.nsu.ru",
+            "telegram": "@id22114",
+            "phone": "+79174728572",
+            "university": "НГУ",
+            "city": "Новосибирск",
+            "citizenship": "Россия"
+        },
+        {
+            "full_name": "Гуськов Никита Викторович",
+            "email": "n.guskov@alumni.nsu.ru",
+            "telegram": "@cutesausage",
+            "phone": "+79518108622",
+            "university": "СПбГУ",
+            "city": "Санкт-Петербург",
+            "citizenship": "Россия"
+        }
+        ],
+    "consent": {
+        "accepted": true,
+        "text_version": "nsu-privacy-registration-v1"
+        }
+}
