@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 
 from openjiuwen.core.foundation.tool import LocalFunction
 
@@ -35,6 +35,7 @@ class LLMClient:
         self,
         messages: list,
         tools: list[LocalFunction],
+        max_tokens: Optional[int] = None,
     ) -> Any:
         """Execute a single LLM call with native tool support.
 
@@ -42,6 +43,8 @@ class LLMClient:
             messages: Conversation history as a list of message dicts
                 (with ``role``, ``content``, and optionally ``tool_calls``).
             tools: List of ``LocalFunction`` tools available to the model.
+            max_tokens: Per-call output token limit. If ``None``, falls back
+                to ``Config.DEFAULT_MAX_TOKENS``.
 
         Returns:
             The ``AssistantMessage`` returned by the model. The caller is
@@ -55,11 +58,15 @@ class LLMClient:
         # Extract ToolInfo from each LocalFunction's card
         tool_infos = [t.card.tool_info() for t in tools]
 
+        effective_max_tokens = (
+            max_tokens if max_tokens is not None else self.config.DEFAULT_MAX_TOKENS
+        )
+
         response = await model.invoke(
             messages=messages,
             tools=tool_infos,
             temperature=self.config.DEFAULT_TEMPERATURE,
-            max_tokens=self.config.DEFAULT_MAX_TOKENS,
+            max_tokens=effective_max_tokens,
         )
         return response
 

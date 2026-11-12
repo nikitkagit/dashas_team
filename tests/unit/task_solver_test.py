@@ -249,7 +249,9 @@ async def test_solve_llm_client_exception(task_repo: TaskRepo, mock_config: Mock
         def __init__(self) -> None:
             pass  # skip real config initialization
 
-        async def call(self, messages: list, tools: list) -> Any:
+        async def call(
+            self, messages: list, tools: list, max_tokens: Optional[int] = None
+        ) -> Any:
             raise RuntimeError("Simulated network failure")
 
     solver = TaskSolver(task_repo, FailingLLMClient(), mock_config)
@@ -313,3 +315,24 @@ async def test_solve_system_prompt_in_first_call(task_repo: TaskRepo, mock_confi
     assert "Available tools are provided natively" in messages[0]["content"]
     assert messages[1]["role"] == "user"
     assert "Write the answer to answer.txt" in messages[1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_solve_max_tokens_budget(task_repo: TaskRepo, mock_config: MockConfig) -> None:
+    """Solver stops and returns failure if max_tokens budget is exceeded."""
+    # Mock returns 10 in, 5 out. Normalized = 10 + 5 * 10 = 60.
+    mock_llm = MockLLMClient(responses=["The final answer is 42"])
+    solver = TaskSolver(task_repo, mock_llm, mock_config)
+
+    # Set a very low max_tokens limit (50).
+    # Before call: remaining = 50. call_max_tokens = max(1, 50 // 10) = 5.
+    # After call: used = 10 + 5 * 10 = 60. 60 >= 50 -> fails.
+    answer, success, in_tok, out_tok = await solver.solve("task_001", max_tokens=50)
+
+    assert not success
+    assert "Max tokens exceeded" in answer
+    assert in_tok == 10
+    assert out_tok == 5
+    
+    # Verify that the LLM client was called with the calculated max_tokens limit
+    assert mock_llm.calls[0]["max_tokens"] == 5

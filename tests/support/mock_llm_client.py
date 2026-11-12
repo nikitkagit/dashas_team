@@ -97,12 +97,18 @@ class MockLLMClient(LLMClient):
             output_tokens=self.output_tokens,
         )
 
-    async def call(self, messages: list, tools: list[LocalFunction]) -> Any:
+    async def call(
+        self,
+        messages: list,
+        tools: list[LocalFunction],
+        max_tokens: Optional[int] = None,
+    ) -> Any:
         """Simulate a native LLM call.
 
         Args:
             messages: Conversation history (snapshot recorded for inspection).
             tools: Tools offered to the model (recorded for inspection).
+            max_tokens: Per-call output token limit passed from TaskSolver.
 
         Returns:
             A MockResponse with ``content``, ``tool_calls`` and ``usage_metadata``.
@@ -110,6 +116,7 @@ class MockLLMClient(LLMClient):
         self.calls.append({
             "messages": [dict(m) for m in messages],
             "tools": list(tools),
+            "max_tokens": max_tokens,
         })
 
         item = (

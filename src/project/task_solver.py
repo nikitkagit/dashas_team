@@ -1,6 +1,5 @@
 import json
-from pathlib import Path
-from typing import Any
+from typing import Optional
 
 from project.llm_client import LLMClient, extract_usage
 from project.task_repo import TaskRepo
@@ -30,11 +29,21 @@ class TaskSolver:
         self.llm_client = llm_client
         self.config = config
 
-    async def solve(self, task_id: str) -> tuple[str, bool, int, int]:
+    async def solve(
+        self,
+        task_id: str,
+        max_tokens: Optional[int] = None,
+    ) -> tuple[str, bool, int, int]:
         """Solve a specific task by its ID.
 
         Args:
             task_id: The unique identifier of the task to solve.
+            max_tokens: Maximum token budget for this task, expressed in
+                normalized 'input tokens' (output tokens are converted
+                via ``Config.OUTPUT_TOKEN_WEIGHT``). If ``None``, no
+                budget limit is enforced. On each LLM call the remaining
+                budget (in normalized units) is converted to an output-token
+                limit and forwarded to ``LLMClient.call``.
 
         Returns:
             A tuple ``(answer_text, success, total_input_tokens, total_output_tokens)``.
@@ -67,8 +76,10 @@ class TaskSolver:
 
         system_prompt = (
             "You are an agent that solves tasks. Available tools are provided natively.\n"
-            "Use tools as needed. When the task is solved, write the final answer "
-            "and save it to answer.txt via write_file."
+            "Be concise: no reasoning out loud, no restating the task, no commentary.\n"
+            "Use as few tool calls as possible; do not re-read files you already saw.\n"
+            "When solved, write ONLY the final answer to answer.txt via write_file "
+            "and stop with an empty message."
         )
 
         messages: list[dict] = [
@@ -81,8 +92,34 @@ class TaskSolver:
 
         max_rounds = 10
         for round_idx in range(max_rounds):
+            # Compute the per-call output-token limit from the remaining budget.
+            call_max_tokens: Optional[int] = None
+            if max_tokens is not None:
+                used_normalized = self.config.normalize_tokens(
+                    total_input_tokens, total_output_tokens
+                )
+                remaining_normalized = max_tokens - used_normalized
+                if remaining_normalized <= 0:
+                    print(
+                        f"  [budget] limit reached before call: used {used_normalized}, "
+                        f"limit {max_tokens} (in={total_input_tokens}, "
+                        f"out={total_output_tokens})"
+                    )
+                    return (
+                        "Max tokens exceeded",
+                        False,
+                        total_input_tokens,
+                        total_output_tokens,
+                    )
+                # Convert the remaining normalized budget to an output-token limit.
+                call_max_tokens = max(
+                    1, remaining_normalized // self.config.OUTPUT_TOKEN_WEIGHT
+                )
+
             try:
-                response = await self.llm_client.call(messages, tools)
+                response = await self.llm_client.call(
+                    messages, tools, max_tokens=call_max_tokens
+                )
             except Exception as e:
                 return f"LLM Error: {e}", False, total_input_tokens, total_output_tokens
 
@@ -91,6 +128,24 @@ class TaskSolver:
             in_tok_round, out_tok_round = extract_usage(response)
             total_input_tokens += in_tok_round
             total_output_tokens += out_tok_round
+
+            # Check the cumulative budget in normalized 'input tokens'
+            if max_tokens is not None:
+                used = self.config.normalize_tokens(
+                    total_input_tokens, total_output_tokens
+                )
+                if used >= max_tokens:
+                    print(
+                        f"  [budget] limit exceeded: used {used}, "
+                        f"limit {max_tokens} (in={total_input_tokens}, "
+                        f"out={total_output_tokens})"
+                    )
+                    return (
+                        "Max tokens exceeded",
+                        False,
+                        total_input_tokens,
+                        total_output_tokens,
+                    )
 
             # Extract assistant content and tool calls from the response
             assistant_content = getattr(response, "content", "") or ""
