@@ -22,6 +22,8 @@ class Config:
     DEFAULT_TEMPERATURE = 0.1
     DEFAULT_MAX_TOKENS = 4096
 
+    OUTPUT_TOKEN_WEIGHT = 10
+
     def __init__(self) -> None:
         """Build the provider-level client configuration from env vars."""
         self.client_config = self._build_client_config()
@@ -57,3 +59,10 @@ class Config:
     def get_model_config(self, model_name: str) -> ModelRequestConfig:
         """Create a model request configuration for the given model name."""
         return ModelRequestConfig(model=model_name)
+    
+    def normalize_tokens(self, input_tokens: int, output_tokens: int) -> int:
+        """Привести пару (input, output) к единой шкале «входных» токенов.
+
+        1 выходной токен = OUTPUT_TOKEN_WEIGHT входных.
+        """
+        return input_tokens + output_tokens * self.OUTPUT_TOKEN_WEIGHT
