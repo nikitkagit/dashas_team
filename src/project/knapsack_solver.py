@@ -2,6 +2,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterator, Optional
 
+from project.task_repo import TaskRepo
+
 
 @dataclass
 class Task:
@@ -10,7 +12,7 @@ class Task:
     reward: float = 0.0        # баллы из task.json
     p_solvable: float = 1.0    # оценка выполнимости [0..1]
     attempts: int = 0          # фактических попыток
-    version: int = 0           # растёт при любом обновлении — для диагностики
+    version: int = 1           # растёт при любом обновлении — для диагностики
 
     @property
     def expected_value(self) -> float:
@@ -25,6 +27,10 @@ class Task:
 
 class KnapsackSolver:
     """Решатель задачи о рюкзаке для конкурсного harness.
+
+    Использует TaskRepo для получения списка задач и их базовых метаданных.
+    Хранит собственные оценки (tokens, p_solvable) отдельно, так как они
+    могут обновляться в процессе работы.
 
     Базовый контракт (по ТЗ):
       * add_task(task_id, tokens)  — добавить задачу; при существующем
@@ -43,42 +49,43 @@ class KnapsackSolver:
       * fit(budget)          — жадный подбор набора задач под бюджет.
     """
 
-    def __init__(self, *, default_reward: float = 1.0) -> None:
+    def __init__(self, task_repo: TaskRepo, default_reward: float = 1.0) -> None:
+        """Инициализировать решатель из репозитория задач.
+
+        Args:
+            task_repo: Репозиторий задач для получения списка task_id и reward.
+            default_reward: Значение reward по умолчанию для задач без явного reward.
+        """
+        self.task_repo = task_repo
         self._tasks: dict[str, Task] = {}
         self._default_reward = default_reward
 
-    # -------------------- методы из ТЗ --------------------
+    def _get_reward_from_repo(self, task_id: str) -> float:
+        """Получить reward для задачи из репозитория."""
+        task_data = self.task_repo.get_task(task_id)
+        if task_data is None:
+            return self._default_reward
+        return float(task_data.get("reward", self._default_reward))
 
-    def add_task(
-        self,
-        task_id: str,
-        tokens: int,
-        *,
-        reward: float | None = None,
-        p_solvable: float = 1.0,
-    ) -> Task:
+    def add_task(self, task_id: str, tokens: int) -> Task:
         """Добавить задачу. Если task_id существует — поля перезаписываются.
 
         Параметры
         ---------
         task_id     : идентификатор задачи (обычно имя каталога);
-        tokens      : ожидаемый расход в выходных токенах; >= 0;
-        reward      : баллы из task.json; при None берётся default_reward;
-        p_solvable  : априорная вероятность выполнимости из триажа [0..1].
+        tokens      : ожидаемый расход в выходных токенах; >= 0.
 
         Возвращает актуальный Task.
         """
         if tokens < 0:
             raise ValueError(f"tokens должен быть >= 0, получено {tokens!r}")
-        if not 0.0 <= p_solvable <= 1.0:
-            raise ValueError(f"p_solvable должен быть в [0,1], получено {p_solvable!r}")
-        reward_val = self._default_reward if reward is None else float(reward)
+        
+        reward_val = self._get_reward_from_repo(task_id)
 
         if task_id in self._tasks:
             t = self._tasks[task_id]
             t.tokens = int(tokens)
             t.reward = reward_val
-            t.p_solvable = float(p_solvable)
             t.version += 1
             return t
 
@@ -86,7 +93,7 @@ class KnapsackSolver:
             task_id=task_id,
             tokens=int(tokens),
             reward=reward_val,
-            p_solvable=float(p_solvable),
+            p_solvable=1.0,
         )
         self._tasks[task_id] = t
         return t
@@ -104,15 +111,11 @@ class KnapsackSolver:
         del self._tasks[best_id]
         return best_id
 
-    # -------------------- обновления оценки --------------------
-
     def update_estimate(
         self,
         task_id: str,
-        *,
         tokens: Optional[int] = None,
         p_solvable: Optional[float] = None,
-        reward: Optional[float] = None,
     ) -> Optional[Task]:
         """Уточнить оценку, не сбрасывая остальные поля. None — если задачи нет."""
         t = self._tasks.get(task_id)
@@ -126,15 +129,12 @@ class KnapsackSolver:
             if not 0.0 <= p_solvable <= 1.0:
                 raise ValueError("p_solvable in [0,1]")
             t.p_solvable = float(p_solvable)
-        if reward is not None:
-            t.reward = float(reward)
         t.version += 1
         return t
 
     def record_attempt(
         self,
         task_id: str,
-        *,
         success: bool,
         real_tokens: int,
         alpha: float = 0.5,
@@ -155,8 +155,6 @@ class KnapsackSolver:
         t.version += 1
         return t
 
-    # -------------------- выбор под бюджет --------------------
-
     def can_start(
         self,
         task_id: str,
@@ -176,7 +174,7 @@ class KnapsackSolver:
             return True
         return remaining_budget >= t.tokens * safety
 
-    def fit(self, budget: int, *, exclude: Optional[set[str]] = None) -> list[str]:
+    def fit(self, budget: int, exclude: Optional[set[str]] = None) -> list[str]:
         """Жадный подбор набора задач под бюджет.
 
         Порядок — по убыванию ROI. Возвращает список task_id, суммарные
@@ -200,8 +198,6 @@ class KnapsackSolver:
                 chosen.append(t.task_id)
                 used += t.tokens
         return chosen
-
-    # -------------------- вспомогательное --------------------
 
     def peek_tastiest(self) -> Optional[str]:
         if not self._tasks:

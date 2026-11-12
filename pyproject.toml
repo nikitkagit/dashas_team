@@ -3,7 +3,8 @@ name = "task-solver-harness"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-    "openjiuwen"
+    "openjiuwen",
+    "hypothesis>=6.0"
 ]
 
 [tool.pyright]
@@ -11,3 +12,6 @@ extraPaths = ["."]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+
+[tool.poetry.group.dev.dependencies]
+hypothesis = "^6.0"
