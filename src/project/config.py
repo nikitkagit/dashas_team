@@ -4,7 +4,7 @@
 MODEL_ROUTING = {
     "coding": "qwen3.8-27b",
     "math": "qwen3.8-27b-noreason",
-    "data_anylisis": "qwen3.6-35b-a3b-noreason",
+    "data_analysis": "qwen3.6-35b-a3b-noreason",
     "search": "qwen3.6-35b-a3b",
 }
 
