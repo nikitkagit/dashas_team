@@ -2,42 +2,14 @@ import argparse
 import asyncio
 import json
 import os
-import re
 import sys
 from pathlib import Path
-from typing import Optional
 
+from project.harness import Harness
 from project.config import Config
 from project.llm_client import LLMClient
 from project.task_repo import TaskRepo
 from project.task_solver import TaskSolver
-
-
-def normalize_int(s: str) -> Optional[int]:
-    """Normalize a string to an integer, ignoring non-digit characters."""
-    s = s.strip()
-    s = re.sub(r"[^\d\-+]", "", s.split("\n")[0])
-    try:
-        return int(s)
-    except ValueError:
-        return None
-
-
-def check_answer(task: dict, answer_text: str) -> bool:
-    """Check if the agent's answer matches the expected result."""
-    check_type = task.get("check", "exact_str")
-    expected = str(task.get("expected", "")).strip()
-    actual = answer_text.strip()
-
-    if check_type == "exact_int":
-        exp_int = normalize_int(expected)
-        act_int = normalize_int(actual)
-        return exp_int is not None and act_int is not None and exp_int == act_int
-    if check_type == "exact_str":
-        return actual.lower() == expected.lower()
-    if check_type == "contains":
-        return expected.lower() in actual.lower()
-    return actual == expected
 
 
 async def async_main() -> None:
@@ -65,97 +37,31 @@ async def async_main() -> None:
         print(f"Ошибка инициализации репозитория: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # Single Config instance shared by all components
     config = Config()
+    
+    # Create a default LLM client (using coding model as default)
+    default_model = config.MODEL_ROUTING.get("coding", "qwen3.8-27b")
+    llm_client = LLMClient(config, default_model)
+    
+    # Create solver with the repo, client, and config
+    solver = TaskSolver(repo, llm_client, config)
+    
+    # Initialize harness with config and solver
+    harness = Harness(tasks_dir, config, solver)
 
-    total_reward = 0
-    results: list[dict] = []
-    total_input_tokens = 0
-    total_output_tokens = 0
-
-    for task_id in repo.get_all_task_ids():
-        if args.task_id and task_id != args.task_id:
-            continue
-
-        task = repo.get_task(task_id)
-        task_dir = repo.get_task_dir(task_id)
-
-        if task is None or task_dir is None:
-            print(f"[{task_id}] Пропущено: задача или директория не найдена")
-            continue
-
-        task_type = task.get("task_type", "")
-        model_name = config.get_model_name(task_type)
-        reward = task.get("reward", 0)
-
-        if not model_name:
-            print(f"[{task_id}] Пропущено: неизвестный тип задачи '{task_type}'")
-            results.append({
-                "task_id": task_id,
-                "success": False,
-                "answer": "Unknown task type",
-                "reward": 0,
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "total_tokens": 0,
-            })
-            continue
-
-        print(f"[{task_id}] type={task_type} model={model_name}")
-
-        # Create a task-specific LLM client using the shared Config
-        llm_client = LLMClient(config, model_name)
-
-        # Initialize solver with the task-specific client and shared Config
-        solver = TaskSolver(repo, llm_client, config)
-        answer, success, input_tokens, output_tokens = await solver.solve(task_id)
-
-        total_input_tokens += input_tokens
-        total_output_tokens += output_tokens
-
-        if success:
-            # For unittest tasks, the check was already performed inside solve()
-            if task.get("check") == "unittest":
-                ok = True
-            else:
-                ok = check_answer(task, answer)
-
-            if ok:
-                total_reward += reward
-                print(f"  ok +{reward} (всего: {total_reward})")
-            else:
-                print(f"  ответ не совпал (ожидалось: {task.get('expected')})")
-        else:
-            print(f"  ошибка: {answer[:200]}")
-
-        results.append({
-            "task_id": task_id,
-            "success": success,
-            "answer": answer[:500] if answer else "",
-            "reward": reward if (success and (
-                task.get("check") == "unittest" or check_answer(task, answer)
-            )) else 0,
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "total_tokens": input_tokens + output_tokens,
-        })
+    report = await harness.run(task_id=args.task_id)
 
     print(
-        f"\n=== ИТОГО: {total_reward} баллов, "
-        f"токенов: in={total_input_tokens}, out={total_output_tokens}, "
-        f"total={total_input_tokens + total_output_tokens} ==="
+        f"\n=== ИТОГО: {report['total_reward']} баллов, "
+        f"токенов: in={report['total_input_tokens']}, "
+        f"out={report['total_output_tokens']}, "
+        f"total={report['total_tokens']} ==="
     )
 
     out_dir = Path(os.environ.get("OUT", "/tmp"))
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "results.json").write_text(
-        json.dumps({
-            "total_reward": total_reward,
-            "total_input_tokens": total_input_tokens,
-            "total_output_tokens": total_output_tokens,
-            "total_tokens": total_input_tokens + total_output_tokens,
-            "results": results,
-        }, ensure_ascii=False, indent=2),
+        json.dumps(report, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
