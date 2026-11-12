@@ -1,9 +1,5 @@
 from typing import Any
 
-from openjiuwen.core.foundation.llm import (
-    ModelClientConfig,
-    ModelRequestConfig,
-)
 from openjiuwen.core.foundation.tool import LocalFunction
 
 # Try to import Model - path may differ depending on openjiuwen version
@@ -12,7 +8,7 @@ try:
 except ImportError:
     from openjiuwen.core.foundation.llm.model import Model
 
-from project.config import DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE
+from project.config import Config
 
 
 class LLMClient:
@@ -24,19 +20,16 @@ class LLMClient:
     and tool dispatch lives in ``TaskSolver``.
     """
 
-    def __init__(
-        self,
-        client_config: ModelClientConfig,
-        model_config: ModelRequestConfig,
-    ):
-        """Initialize the client with model and provider configuration.
+    def __init__(self, config: Config, model_name: str):
+        """Initialize the client with shared configuration and a model name.
 
         Args:
-            client_config: Provider-level configuration (API key, base URL).
-            model_config: Model-level configuration (model name, etc.).
+            config: Shared ``Config`` instance providing client config and defaults.
+            model_name: Name of the model to use for this client.
         """
-        self.client_config = client_config
-        self.model_config = model_config
+        self.config = config
+        self.client_config = config.client_config
+        self.model_config = config.get_model_config(model_name)
 
     async def call(
         self,
@@ -65,8 +58,8 @@ class LLMClient:
         response = await model.invoke(
             messages=messages,
             tools=tool_infos,
-            temperature=DEFAULT_TEMPERATURE,
-            max_tokens=DEFAULT_MAX_TOKENS,
+            temperature=self.config.DEFAULT_TEMPERATURE,
+            max_tokens=self.config.DEFAULT_MAX_TOKENS,
         )
         return response
 

@@ -1,13 +1,59 @@
-"""Configuration constants for the harness."""
+import os
+import sys
+from typing import Optional
 
-# Model routing: task_type -> model name
-MODEL_ROUTING = {
-    "coding": "qwen3.8-27b",
-    "math": "qwen3.8-27b-noreason",
-    "data_analysis": "qwen3.6-35b-a3b-noreason",
-    "search": "qwen3.6-35b-a3b",
-}
+from openjiuwen.core.foundation.llm import ModelClientConfig, ModelRequestConfig
 
-# Default LLM request parameters
-DEFAULT_TEMPERATURE = 0.1
-DEFAULT_MAX_TOKENS = 4096
+
+class Config:
+    """Central configuration holder.
+
+    Reads environment variables and exposes model routing and defaults.
+    Created once in ``main`` and passed to all components that need it.
+    """
+
+    MODEL_ROUTING = {
+        "coding": "qwen3.8-27b",
+        "math": "qwen3.8-27b-noreason",
+        "data_analysis": "qwen3.6-35b-a3b-noreason",
+        "search": "qwen3.6-35b-a3b",
+    }
+
+    DEFAULT_TEMPERATURE = 0.1
+    DEFAULT_MAX_TOKENS = 4096
+
+    def __init__(self) -> None:
+        """Build the provider-level client configuration from env vars."""
+        self.client_config = self._build_client_config()
+
+    def _build_client_config(self) -> ModelClientConfig:
+        provider = os.getenv("MODEL_PROVIDER", "OpenAI")
+        api_key = os.environ.get("LLM_API_KEY")
+        api_base = os.environ.get("LLM_BASE_URL")
+
+        if not api_key:
+            sys.exit(
+                "API_KEY is not set. Export a LiteLLM virtual key (starts with 'sk-')."
+            )
+        if not api_key.startswith("sk-"):
+            sys.exit(
+                "API_KEY must be a LiteLLM virtual key starting with 'sk-'. "
+                "The invite code is not an API key."
+            )
+        if not api_base:
+            raise RuntimeError("LLM_BASE_URL is not set")
+
+        return ModelClientConfig(
+            client_provider=provider,
+            api_key=api_key,
+            api_base=api_base,
+            verify_ssl=False,
+        )
+
+    def get_model_name(self, task_type: str) -> Optional[str]:
+        """Return the model name configured for a given task type."""
+        return self.MODEL_ROUTING.get(task_type)
+
+    def get_model_config(self, model_name: str) -> ModelRequestConfig:
+        """Create a model request configuration for the given model name."""
+        return ModelRequestConfig(model=model_name)

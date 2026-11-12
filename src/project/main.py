@@ -7,11 +7,10 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from project.config import MODEL_ROUTING
+from project.config import Config
 from project.llm_client import LLMClient
 from project.task_repo import TaskRepo
 from project.task_solver import TaskSolver
-from project.utils import build_client_config, build_model_config
 
 
 def normalize_int(s: str) -> Optional[int]:
@@ -66,8 +65,8 @@ async def async_main() -> None:
         print(f"Ошибка инициализации репозитория: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # Base client configuration (API keys, base URL)
-    client_config = build_client_config()
+    # Single Config instance shared by all components
+    config = Config()
 
     total_reward = 0
     results: list[dict] = []
@@ -86,7 +85,7 @@ async def async_main() -> None:
             continue
 
         task_type = task.get("task_type", "")
-        model_name = MODEL_ROUTING.get(task_type)
+        model_name = config.get_model_name(task_type)
         reward = task.get("reward", 0)
 
         if not model_name:
@@ -104,12 +103,11 @@ async def async_main() -> None:
 
         print(f"[{task_id}] type={task_type} model={model_name}")
 
-        # Create a specific LLM client configured for this task's model
-        model_config = build_model_config(model_name)
-        llm_client = LLMClient(client_config, model_config)
+        # Create a task-specific LLM client using the shared Config
+        llm_client = LLMClient(config, model_name)
 
-        # Initialize solver with the task-specific client
-        solver = TaskSolver(repo, llm_client)
+        # Initialize solver with the task-specific client and shared Config
+        solver = TaskSolver(repo, llm_client, config)
         answer, success, input_tokens, output_tokens = await solver.solve(task_id)
 
         total_input_tokens += input_tokens

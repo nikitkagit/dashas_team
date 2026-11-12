@@ -7,6 +7,7 @@ import pytest
 from project.llm_client import LLMClient
 from project.task_repo import TaskRepo
 from project.task_solver import TaskSolver
+from tests.support.mock_config import MockConfig
 from tests.support.mock_llm_client import MockLLMClient, MockResponse, MockToolCall
 
 
@@ -75,11 +76,17 @@ def task_repo(tmp_path: Path) -> TaskRepo:
     return TaskRepo(tmp_path)
 
 
+@pytest.fixture
+def mock_config() -> MockConfig:
+    """Create a MockConfig instance for tests."""
+    return MockConfig()
+
+
 @pytest.mark.asyncio
-async def test_solve_task_not_found(task_repo: TaskRepo) -> None:
+async def test_solve_task_not_found(task_repo: TaskRepo, mock_config: MockConfig) -> None:
     """Solving a non-existent task returns failure without calling the LLM."""
     mock_llm = MockLLMClient(responses=[])
-    solver = TaskSolver(task_repo, mock_llm)
+    solver = TaskSolver(task_repo, mock_llm, mock_config)
 
     answer, success, in_tok, out_tok = await solver.solve("non_existent_task")
 
@@ -90,10 +97,10 @@ async def test_solve_task_not_found(task_repo: TaskRepo) -> None:
 
 
 @pytest.mark.asyncio
-async def test_solve_unknown_task_type(task_repo: TaskRepo) -> None:
+async def test_solve_unknown_task_type(task_repo: TaskRepo, mock_config: MockConfig) -> None:
     """Solving a task with an unknown type returns failure without calling the LLM."""
     mock_llm = MockLLMClient(responses=[])
-    solver = TaskSolver(task_repo, mock_llm)
+    solver = TaskSolver(task_repo, mock_llm, mock_config)
 
     answer, success, in_tok, out_tok = await solver.solve("task_002")
 
@@ -104,10 +111,10 @@ async def test_solve_unknown_task_type(task_repo: TaskRepo) -> None:
 
 
 @pytest.mark.asyncio
-async def test_solve_direct_answer(task_repo: TaskRepo) -> None:
+async def test_solve_direct_answer(task_repo: TaskRepo, mock_config: MockConfig) -> None:
     """When the LLM returns a plain text answer, it is written to answer.txt."""
     mock_llm = MockLLMClient(responses=["The final answer is 42"])
-    solver = TaskSolver(task_repo, mock_llm)
+    solver = TaskSolver(task_repo, mock_llm, mock_config)
 
     answer, success, in_tok, out_tok = await solver.solve("task_001")
 
@@ -126,7 +133,7 @@ async def test_solve_direct_answer(task_repo: TaskRepo) -> None:
 
 
 @pytest.mark.asyncio
-async def test_solve_with_native_tool_call(task_repo: TaskRepo) -> None:
+async def test_solve_with_native_tool_call(task_repo: TaskRepo, mock_config: MockConfig) -> None:
     """Native tool_calls on the response are executed and their results fed back."""
     # First response: native tool call to write_file
     tool_call = MockToolCall(
@@ -141,7 +148,7 @@ async def test_solve_with_native_tool_call(task_repo: TaskRepo) -> None:
     )
 
     mock_llm = MockLLMClient(responses=[[tool_call], final_response])
-    solver = TaskSolver(task_repo, mock_llm)
+    solver = TaskSolver(task_repo, mock_llm, mock_config)
 
     answer, success, in_tok, out_tok = await solver.solve("task_001")
 
@@ -164,7 +171,7 @@ async def test_solve_with_native_tool_call(task_repo: TaskRepo) -> None:
 
 
 @pytest.mark.asyncio
-async def test_solve_tool_execution_error(task_repo: TaskRepo) -> None:
+async def test_solve_tool_execution_error(task_repo: TaskRepo, mock_config: MockConfig) -> None:
     """A tool that raises an error reports the error back to the LLM."""
     # Request a tool with an invalid path to trigger PermissionError
     tool_call = MockToolCall(
@@ -174,7 +181,7 @@ async def test_solve_tool_execution_error(task_repo: TaskRepo) -> None:
     final_response = MockResponse(content="Handled error.")
 
     mock_llm = MockLLMClient(responses=[[tool_call], final_response])
-    solver = TaskSolver(task_repo, mock_llm)
+    solver = TaskSolver(task_repo, mock_llm, mock_config)
 
     answer, success, _, _ = await solver.solve("task_001")
 
@@ -191,7 +198,7 @@ async def test_solve_tool_execution_error(task_repo: TaskRepo) -> None:
 
 
 @pytest.mark.asyncio
-async def test_solve_unknown_tool_name(task_repo: TaskRepo) -> None:
+async def test_solve_unknown_tool_name(task_repo: TaskRepo, mock_config: MockConfig) -> None:
     """Calling a tool that does not exist reports 'Tool not found'."""
     tool_call = MockToolCall(
         name="nonexistent_tool",
@@ -200,7 +207,7 @@ async def test_solve_unknown_tool_name(task_repo: TaskRepo) -> None:
     final_response = MockResponse(content="Final answer")
 
     mock_llm = MockLLMClient(responses=[[tool_call], final_response])
-    solver = TaskSolver(task_repo, mock_llm)
+    solver = TaskSolver(task_repo, mock_llm, mock_config)
 
     answer, success, _, _ = await solver.solve("task_001")
 
@@ -214,7 +221,7 @@ async def test_solve_unknown_tool_name(task_repo: TaskRepo) -> None:
 
 
 @pytest.mark.asyncio
-async def test_solve_max_rounds_exceeded(task_repo: TaskRepo) -> None:
+async def test_solve_max_rounds_exceeded(task_repo: TaskRepo, mock_config: MockConfig) -> None:
     """The solver stops after max_rounds (10) of tool calls."""
     tool_call = MockToolCall(
         name="list_files",
@@ -222,7 +229,7 @@ async def test_solve_max_rounds_exceeded(task_repo: TaskRepo) -> None:
     )
     # Provide more responses than max_rounds
     mock_llm = MockLLMClient(responses=[[tool_call]] * 15)
-    solver = TaskSolver(task_repo, mock_llm)
+    solver = TaskSolver(task_repo, mock_llm, mock_config)
 
     answer, success, in_tok, out_tok = await solver.solve("task_001")
 
@@ -235,7 +242,7 @@ async def test_solve_max_rounds_exceeded(task_repo: TaskRepo) -> None:
 
 
 @pytest.mark.asyncio
-async def test_solve_llm_client_exception(task_repo: TaskRepo) -> None:
+async def test_solve_llm_client_exception(task_repo: TaskRepo, mock_config: MockConfig) -> None:
     """An exception raised by the LLM client is propagated as a failure."""
 
     class FailingLLMClient(LLMClient):
@@ -245,7 +252,7 @@ async def test_solve_llm_client_exception(task_repo: TaskRepo) -> None:
         async def call(self, messages: list, tools: list) -> Any:
             raise RuntimeError("Simulated network failure")
 
-    solver = TaskSolver(task_repo, FailingLLMClient())
+    solver = TaskSolver(task_repo, FailingLLMClient(), mock_config)
 
     answer, success, in_tok, out_tok = await solver.solve("task_001")
 
@@ -256,7 +263,7 @@ async def test_solve_llm_client_exception(task_repo: TaskRepo) -> None:
 
 
 @pytest.mark.asyncio
-async def test_solve_reads_answer_from_file_if_present(task_repo: TaskRepo) -> None:
+async def test_solve_reads_answer_from_file_if_present(task_repo: TaskRepo, mock_config: MockConfig) -> None:
     """If answer.txt already exists in workspace, its content is used as the answer."""
     # Pre-populate answer.txt in the workspace
     task_dir = task_repo.get_task_dir("task_001")
@@ -267,7 +274,7 @@ async def test_solve_reads_answer_from_file_if_present(task_repo: TaskRepo) -> N
 
     # LLM returns a different text, but the file takes precedence
     mock_llm = MockLLMClient(responses=["ignored text"])
-    solver = TaskSolver(task_repo, mock_llm)
+    solver = TaskSolver(task_repo, mock_llm, mock_config)
 
     answer, success, _, _ = await solver.solve("task_001")
 
@@ -276,10 +283,10 @@ async def test_solve_reads_answer_from_file_if_present(task_repo: TaskRepo) -> N
 
 
 @pytest.mark.asyncio
-async def test_solve_passes_tools_to_client(task_repo: TaskRepo) -> None:
+async def test_solve_passes_tools_to_client(task_repo: TaskRepo, mock_config: MockConfig) -> None:
     """The solver passes the full list of tools to the LLM client on every call."""
     mock_llm = MockLLMClient(responses=["Final answer"])
-    solver = TaskSolver(task_repo, mock_llm)
+    solver = TaskSolver(task_repo, mock_llm, mock_config)
 
     await solver.solve("task_001")
 
@@ -293,10 +300,10 @@ async def test_solve_passes_tools_to_client(task_repo: TaskRepo) -> None:
 
 
 @pytest.mark.asyncio
-async def test_solve_system_prompt_in_first_call(task_repo: TaskRepo) -> None:
+async def test_solve_system_prompt_in_first_call(task_repo: TaskRepo, mock_config: MockConfig) -> None:
     """The first LLM call contains a system prompt and the task instruction."""
     mock_llm = MockLLMClient(responses=["Final answer"])
-    solver = TaskSolver(task_repo, mock_llm)
+    solver = TaskSolver(task_repo, mock_llm, mock_config)
 
     await solver.solve("task_001")
 

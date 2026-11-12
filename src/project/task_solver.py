@@ -1,13 +1,11 @@
 import json
-import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
-from project.config import MODEL_ROUTING
 from project.llm_client import LLMClient, extract_usage
 from project.task_repo import TaskRepo
 from project.tool_box import ToolBox
+from project.config import Config
 
 
 class TaskSolver:
@@ -19,16 +17,18 @@ class TaskSolver:
     can be replaced with a test double in unit tests.
     """
 
-    def __init__(self, task_repo: TaskRepo, llm_client: LLMClient):
+    def __init__(self, task_repo: TaskRepo, llm_client: LLMClient, config: Config):
         """Initialize the solver.
 
         Args:
             task_repo: Repository providing access to tasks by ID.
             llm_client: Client used to invoke the LLM. Can be a
                 stub or mock in tests.
+            config: Shared ``Config`` instance for model routing.
         """
         self.task_repo = task_repo
         self.llm_client = llm_client
+        self.config = config
 
     async def solve(self, task_id: str) -> tuple[str, bool, int, int]:
         """Solve a specific task by its ID.
@@ -48,7 +48,7 @@ class TaskSolver:
             return f"Task {task_id} not found", False, 0, 0
 
         task_type = task.get("task_type", "")
-        model_name = MODEL_ROUTING.get(task_type)
+        model_name = self.config.get_model_name(task_type)
         if not model_name:
             return f"Unknown task type: {task_type}", False, 0, 0
 
