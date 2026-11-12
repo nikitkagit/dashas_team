@@ -30,8 +30,8 @@ class Config:
 
     def _build_client_config(self) -> ModelClientConfig:
         provider = os.getenv("MODEL_PROVIDER", "OpenAI")
-        api_key = os.environ.get("LLM_API_KEY")
-        api_base = os.environ.get("LLM_BASE_URL")
+        api_key = os.environ.get("API_KEY")
+        api_base = "https://api.neuraldeep.ru/v1"
 
         if not api_key:
             sys.exit(
@@ -43,7 +43,7 @@ class Config:
                 "The invite code is not an API key."
             )
         if not api_base:
-            raise RuntimeError("LLM_BASE_URL is not set")
+            raise RuntimeError("BASE_URL is not set")
 
         return ModelClientConfig(
             client_provider=provider,
