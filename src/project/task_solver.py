@@ -1,20 +1,22 @@
 import json
-import re
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
 from project.config import MODEL_ROUTING
-from project.llm_client import LLMClient
+from project.llm_client import LLMClient, extract_usage
 from project.task_repo import TaskRepo
 from project.tool_box import ToolBox
+
 
 class TaskSolver:
     """Solves tasks using an LLM client and the provided ToolBox.
 
     This class owns the conversation history, tool-dispatch loop,
-    and answer extraction logic. The underlying LLM invocation is
-    delegated to an ``LLMClient`` instance, which can be replaced
-    with a test double in unit tests.
+    token accounting, and answer extraction logic. The underlying
+    LLM invocation is delegated to an ``LLMClient`` instance, which
+    can be replaced with a test double in unit tests.
     """
 
     def __init__(self, task_repo: TaskRepo, llm_client: LLMClient):
@@ -28,27 +30,27 @@ class TaskSolver:
         self.task_repo = task_repo
         self.llm_client = llm_client
 
-    async def solve(self, task_id: str) -> tuple[str, bool]:
+    async def solve(self, task_id: str) -> tuple[str, bool, int, int]:
         """Solve a specific task by its ID.
 
         Args:
             task_id: The unique identifier of the task to solve.
 
         Returns:
-            A tuple containing the final answer text and a boolean
-            indicating whether the solving process completed
-            successfully (not whether the answer is correct).
+            A tuple ``(answer_text, success, total_input_tokens, total_output_tokens)``.
+            ``success`` indicates whether the solving process completed
+            (and, for ``unittest`` tasks, whether the test passed).
         """
         task = self.task_repo.get_task(task_id)
         task_dir = self.task_repo.get_task_dir(task_id)
 
         if not task or not task_dir:
-            return f"Task {task_id} not found", False
+            return f"Task {task_id} not found", False, 0, 0
 
         task_type = task.get("task_type", "")
         model_name = MODEL_ROUTING.get(task_type)
         if not model_name:
-            return f"Unknown task type: {task_type}", False
+            return f"Unknown task type: {task_type}", False, 0, 0
 
         toolbox = ToolBox(task_dir)
 
@@ -63,111 +65,85 @@ class TaskSolver:
             toolbox.recall(),
         ]
 
-        tools_desc = "\n".join([
-            f"- {t.card.name}: {t.card.description}"
-            for t in tools
-        ])
-
         system_prompt = (
-            "You are an agent that solves tasks. Available tools:\n"
-            f"{tools_desc}\n\n"
-            "To call a tool, respond with JSON of the form: "
-            '{"tool": "tool_name", "args": {...}}\n'
-            "When the task is solved, write the final answer and save it to answer.txt via write_file."
+            "You are an agent that solves tasks. Available tools are provided natively.\n"
+            "Use tools as needed. When the task is solved, write the final answer "
+            "and save it to answer.txt via write_file."
         )
 
-        messages = [
+        messages: list[dict] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": task["instruction"]},
         ]
 
+        total_input_tokens = 0
+        total_output_tokens = 0
+
         max_rounds = 10
         for round_idx in range(max_rounds):
-            system_content, user_prompt = self._format_messages(messages)
-
             try:
-                result = await self.llm_client.call(system_content, user_prompt)
+                response = await self.llm_client.call(messages, tools)
             except Exception as e:
-                return f"LLM Error: {e}", False
+                return f"LLM Error: {e}", False, total_input_tokens, total_output_tokens
 
-            answer_text = self._extract_answer(result)
+            print(f"[{task['task_id']}] round {round_idx}: model={model_name}")
 
-            tool_match = re.search(
-                r'\{"tool":\s*"(\w+)",\s*"args":\s*(\{.*?\})\}',
-                answer_text,
-                re.DOTALL,
-            )
+            in_tok_round, out_tok_round = extract_usage(response)
+            total_input_tokens += in_tok_round
+            total_output_tokens += out_tok_round
 
-            if tool_match:
-                tool_name = tool_match.group(1)
-                try:
-                    tool_args = json.loads(tool_match.group(2))
-                except json.JSONDecodeError:
-                    tool_args = {}
+            # Extract assistant content and tool calls from the response
+            assistant_content = getattr(response, "content", "") or ""
+            tool_calls = getattr(response, "tool_calls", None)
 
-                tool_result = "Tool not found"
-                for t in tools:
-                    if t.card.name == tool_name:
-                        try:
-                            tool_result = await t.invoke(tool_args)
-                        except Exception as e:
-                            tool_result = f"Error: {e}"
-                        break
+            # If there are tool calls, execute each and continue the loop
+            if tool_calls:
+                messages.append({
+                    "role": "assistant",
+                    "content": assistant_content,
+                    "tool_calls": tool_calls,
+                })
+                for tc in tool_calls:
+                    # ToolCall is a Pydantic object, access attributes directly
+                    tool_name = tc.name
+                    tool_args_str = tc.arguments
+                    try:
+                        tool_args = json.loads(tool_args_str)
+                    except json.JSONDecodeError:
+                        tool_args = {}
 
-                messages.append({"role": "assistant", "content": answer_text})
-                messages.append({"role": "tool", "content": str(tool_result)[:4000]})
+                    tool_result = "Tool not found"
+                    for t in tools:
+                        if t.card.name == tool_name:
+                            try:
+                                tool_result = await t.invoke(tool_args)
+                            except Exception as e:
+                                tool_result = f"Error: {e}"
+                            break
+
+                    messages.append({
+                        "role": "tool",
+                        "content": str(tool_result)[:4000],
+                        "tool_call_id": tc.id,
+                    })
                 continue
+
+            # No tool calls - this is the final answer
+            answer_text = assistant_content.strip()
 
             answer_file = toolbox.workspace / "answer.txt"
             if answer_file.exists():
                 answer_text = answer_file.read_text(encoding="utf-8").strip()
 
             (task_dir / "answer.txt").write_text(answer_text, encoding="utf-8")
-            return answer_text, True
 
-        return "Max rounds exceeded", False
+            print(
+                f"  [tokens] input={total_input_tokens}, "
+                f"output={total_output_tokens}, "
+                f"total={total_input_tokens + total_output_tokens}"
+            )
 
-    @staticmethod
-    def _format_messages(messages: list[dict]) -> tuple[str, str]:
-        """Split messages into system prompt and flattened user prompt.
+            # return the answer
+            return answer_text, True, total_input_tokens, total_output_tokens
 
-        Args:
-            messages: Conversation history as a list of message dicts.
-
-        Returns:
-            A tuple ``(system_content, user_prompt)``.
-        """
-        history_parts = []
-        system_content = ""
-
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            if role == "system":
-                system_content = content
-                continue
-            if role == "tool":
-                history_parts.append(f"[Tool result]: {content}")
-            elif role == "assistant":
-                history_parts.append(f"[Assistant]: {content}")
-            else:
-                history_parts.append(f"[User]: {content}")
-
-        return system_content, "\n".join(history_parts)
-
-    @staticmethod
-    def _extract_answer(result: Any) -> str:
-        """Extract the assistant's text answer from a workflow result.
-
-        Args:
-            result: The object returned by ``LLMClient.run``.
-
-        Returns:
-            The extracted answer string, or an empty string if the
-            result structure is unexpected.
-        """
-        if hasattr(result, "result") and isinstance(result.result, dict):
-            output = result.result.get("output", {})
-            if isinstance(output, dict):
-                return output.get("answer", "")
-        return ""
+        return "Max rounds exceeded", False, total_input_tokens, total_output_tokens

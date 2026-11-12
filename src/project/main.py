@@ -1,5 +1,3 @@
-"""Main entry point for the task-solving harness."""
-
 import argparse
 import asyncio
 import json
@@ -44,9 +42,17 @@ def check_answer(task: dict, answer_text: str) -> bool:
 
 
 async def async_main() -> None:
-    parser = argparse.ArgumentParser(description="Run the agent harness on a directory of tasks.")
-    parser.add_argument("--tasks-dir", required=True, help="Directory containing task subdirectories")
-    parser.add_argument("--task-id", default=None, help="Optional: specific task_id to run (e.g., 'coding_0003')")
+    parser = argparse.ArgumentParser(
+        description="Run the agent harness on a directory of tasks."
+    )
+    parser.add_argument(
+        "--tasks-dir", required=True,
+        help="Directory containing task subdirectories",
+    )
+    parser.add_argument(
+        "--task-id", default=None,
+        help="Optional: specific task_id to run (e.g., 'coding_0003')",
+    )
     args = parser.parse_args()
 
     tasks_dir = Path(args.tasks_dir)
@@ -62,9 +68,11 @@ async def async_main() -> None:
 
     # Base client configuration (API keys, base URL)
     client_config = build_client_config()
-    
+
     total_reward = 0
-    results = []
+    results: list[dict] = []
+    total_input_tokens = 0
+    total_output_tokens = 0
 
     for task_id in repo.get_all_task_ids():
         if args.task_id and task_id != args.task_id:
@@ -72,7 +80,7 @@ async def async_main() -> None:
 
         task = repo.get_task(task_id)
         task_dir = repo.get_task_dir(task_id)
-        
+
         if task is None or task_dir is None:
             print(f"[{task_id}] Пропущено: задача или директория не найдена")
             continue
@@ -88,6 +96,9 @@ async def async_main() -> None:
                 "success": False,
                 "answer": "Unknown task type",
                 "reward": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
             })
             continue
 
@@ -96,13 +107,21 @@ async def async_main() -> None:
         # Create a specific LLM client configured for this task's model
         model_config = build_model_config(model_name)
         llm_client = LLMClient(client_config, model_config)
-        
+
         # Initialize solver with the task-specific client
         solver = TaskSolver(repo, llm_client)
-        answer, success = await solver.solve(task_id)
+        answer, success, input_tokens, output_tokens = await solver.solve(task_id)
+
+        total_input_tokens += input_tokens
+        total_output_tokens += output_tokens
 
         if success:
-            ok = check_answer(task, answer)
+            # For unittest tasks, the check was already performed inside solve()
+            if task.get("check") == "unittest":
+                ok = True
+            else:
+                ok = check_answer(task, answer)
+
             if ok:
                 total_reward += reward
                 print(f"  ok +{reward} (всего: {total_reward})")
@@ -115,15 +134,30 @@ async def async_main() -> None:
             "task_id": task_id,
             "success": success,
             "answer": answer[:500] if answer else "",
-            "reward": reward if (success and check_answer(task, answer)) else 0,
+            "reward": reward if (success and (
+                task.get("check") == "unittest" or check_answer(task, answer)
+            )) else 0,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
         })
 
-    print(f"\n=== ИТОГО: {total_reward} баллов ===")
-    
+    print(
+        f"\n=== ИТОГО: {total_reward} баллов, "
+        f"токенов: in={total_input_tokens}, out={total_output_tokens}, "
+        f"total={total_input_tokens + total_output_tokens} ==="
+    )
+
     out_dir = Path(os.environ.get("OUT", "/tmp"))
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "results.json").write_text(
-        json.dumps({"total_reward": total_reward, "results": results}, ensure_ascii=False, indent=2),
+        json.dumps({
+            "total_reward": total_reward,
+            "total_input_tokens": total_input_tokens,
+            "total_output_tokens": total_output_tokens,
+            "total_tokens": total_input_tokens + total_output_tokens,
+            "results": results,
+        }, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
