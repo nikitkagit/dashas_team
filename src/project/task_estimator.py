@@ -23,24 +23,27 @@ class EstimatorConfig:
     """Tunable parameters for ``TaskEstimator``."""
 
     # Per-task-type base costs; recalibrated at runtime via ``calibrate``.
+    # Values include the fixed per-run overhead (system prompt + tool
+    # schemas ≈ 1500 normalized tokens for one LLM call).
     base_costs: dict[str, int] = field(
         default_factory=lambda: {
-            "coding": 3000,
-            "math": 1000,
-            "data_analysis": 2000,
-            "search": 800,
+            "coding": 4000,
+            "math": 2500,
+            "data_analysis": 3000,
+            "search": 2000,
         }
     )
-    default_base: int = 1500
+    default_base: int = 2500
 
-    # Category -> (normalized tokens, p_solvable)
+    # Category -> (normalized tokens, p_solvable).
+    # Tokens are total budgets, including the fixed per-task overhead.
     category_map: dict[str, tuple[int, float]] = field(
         default_factory=lambda: {
-            "tiny": (500, 0.95),
-            "small": (1500, 0.90),
-            "medium": (4000, 0.75),
-            "large": (10000, 0.55),
-            "huge": (25000, 0.40),
+            "tiny": (2500, 0.95),
+            "small": (4000, 0.90),
+            "medium": (8000, 0.75),
+            "large": (16000, 0.55),
+            "huge": (30000, 0.40),
         }
     )
     category_order: tuple[str, ...] = ("tiny", "small", "medium", "large", "huge")

@@ -30,7 +30,38 @@ def mock_config():
 
 @pytest.fixture
 def est_config():
-    return EstimatorConfig()
+    """Explicitly generate EstimatorConfig to avoid relying on fragile defaults."""
+    return EstimatorConfig(
+        base_costs={
+            "coding": 4000,
+            "math": 2500,
+            "data_analysis": 3000,
+            "search": 2000,
+        },
+        default_base=2500,
+        category_map={
+            "tiny": (2500, 0.95),
+            "small": (4000, 0.90),
+            "medium": (8000, 0.75),
+            "large": (16000, 0.55),
+            "huge": (30000, 0.40),
+        },
+        category_order=("tiny", "small", "medium", "large", "huge"),
+        heuristic_p_solvable={
+            "coding": 0.65,
+            "math": 0.75,
+            "data_analysis": 0.70,
+            "search": 0.85,
+        },
+        default_p_solvable=0.60,
+        heuristic_safety=1.2,
+        workspace_read_cap=8000,
+        llm_prompt_instruction_cap=2000,
+        llm_prompt_files_cap=30,
+        llm_confidence=0.7,
+        heuristic_confidence=0.4,
+        calibration_alpha=0.3,
+    )
 
 
 @pytest.fixture
@@ -71,8 +102,8 @@ class TestEstimateHeuristic:
     def test_basic_estimate(self, estimator):
         wire_repo(estimator, make_task("coding", "x" * 400, "exact_int"))
         est = estimator._heuristic_estimate("t1")
-        # base=3000, instr=100, workspace=0, check=200 => 3300 * 1.2 = 3960
-        assert est.tokens == int((3000 + 100 + 0 + 200) * 1.2)
+        # base=4000, instr=100, workspace=0, check=200 => 4300 * 1.2 = 5160
+        assert est.tokens == 5160
         assert est.p_solvable == 0.65
         assert est.source == "heuristic"
         assert est.confidence == estimator.est_cfg.heuristic_confidence
@@ -84,8 +115,8 @@ class TestEstimateHeuristic:
         (ws / "b.txt").write_text("x" * 2000)
         wire_repo(estimator, make_task("search", "", "exact_str"), tmp_path)
         est = estimator._heuristic_estimate("t1")
-        # base=800, instr=0, ws=750, check=100 => 1650 * 1.2 = 1980
-        assert est.tokens == int((800 + 0 + 750 + 100) * 1.2)
+        # base=2000, instr=0, ws=750, check=100 => 2850 * 1.2 = 3420
+        assert est.tokens == 3420
 
     def test_workspace_cost_capped(self, estimator, tmp_path):
         ws = tmp_path / "workspace"
@@ -104,12 +135,14 @@ class TestEstimateHeuristic:
         estimator.est_cfg.heuristic_safety = 0.1
         wire_repo(estimator, make_task("coding", "", "exact_str"))
         est = estimator._heuristic_estimate("t1")
+        # (1 + 0 + 0 + 100) * 0.1 = 10.1 -> max(10.1, 100) = 100
         assert est.tokens == 100
 
     def test_unknown_task_type_uses_default_base(self, estimator):
         wire_repo(estimator, make_task("weird_type", "", "exact_str"))
         est = estimator._heuristic_estimate("t1")
-        assert est.tokens == int((estimator.est_cfg.default_base + 0 + 0 + 100) * 1.2)
+        # base=2500, instr=0, ws=0, check=100 => 2600 * 1.2 = 3120
+        assert est.tokens == 3120
 
     def test_heuristic_p_solvable_known(self, estimator):
         assert estimator._heuristic_p_solvable("coding") == 0.65
@@ -217,43 +250,43 @@ class TestCalibrate:
     def test_calibrates_base_cost(self, estimator):
         wire_repo(estimator, make_task("coding"))
         estimator.calibrate("t1", real_tokens=10000, success=True, alpha=0.5)
-        # 0.5*3000 + 0.5*10000 = 6500
-        assert estimator._base_costs["coding"] == 6500
+        # 0.5 * 4000 + 0.5 * 10000 = 7000
+        assert estimator._base_costs["coding"] == 7000
 
     def test_calibrates_per_type_p_up(self, estimator):
         wire_repo(estimator, make_task("coding"))
         estimator.calibrate("t1", real_tokens=1000, success=True, alpha=0.5)
-        # 0.5*0.65 + 0.5*1.0 = 0.825
+        # 0.5 * 0.65 + 0.5 * 1.0 = 0.825
         assert estimator.est_cfg.heuristic_p_solvable["coding"] == pytest.approx(0.825)
 
     def test_calibrates_per_type_p_down(self, estimator):
         wire_repo(estimator, make_task("coding"))
         estimator.calibrate("t1", real_tokens=1000, success=False, alpha=0.5)
-        # 0.5*0.65 + 0.5*0.0 = 0.325
+        # 0.5 * 0.65 + 0.5 * 0.0 = 0.325
         assert estimator.est_cfg.heuristic_p_solvable["coding"] == pytest.approx(0.325)
 
     def test_calibrates_per_type_p_new_type(self, estimator):
         wire_repo(estimator, make_task("brand_new"))
         estimator.calibrate("t1", real_tokens=1000, success=True, alpha=0.5)
-        # starts from default_p_solvable=0.6: 0.5*0.6 + 0.5*1.0 = 0.8
-        assert estimator.est_cfg.heuristic_p_solvable["brand_new"] == pytest.approx(0.8)
+        # starts from default_p_solvable=0.60: 0.5 * 0.60 + 0.5 * 1.0 = 0.80
+        assert estimator.est_cfg.heuristic_p_solvable["brand_new"] == pytest.approx(0.80)
 
     def test_calibrates_default_p_when_type_empty(self, estimator):
         wire_repo(estimator, make_task(""))
         estimator.calibrate("t1", real_tokens=1000, success=True, alpha=0.5)
-        # 0.5*0.6 + 0.5*1.0 = 0.8
-        assert estimator.est_cfg.default_p_solvable == pytest.approx(0.8)
+        # 0.5 * 0.60 + 0.5 * 1.0 = 0.80
+        assert estimator.est_cfg.default_p_solvable == pytest.approx(0.80)
 
     def test_calibrates_safety_up(self, estimator):
         wire_repo(estimator, make_task("coding"))
-        # prior tokens = (3000+0+0+100)*1.2 = 3720, ratio ~2.69
+        # prior tokens = (4000 + 0 + 0 + 100) * 1.2 = 4920, ratio ~2.03
         estimator.calibrate("t1", real_tokens=10000, success=True, alpha=0.5)
         s = estimator.est_cfg.heuristic_safety
         assert 1.2 < s <= 3.0
 
     def test_calibrates_safety_down_clamped_to_1(self, estimator):
         wire_repo(estimator, make_task("coding"))
-        # ratio ~0.027 -> geometric mean would push below 1, clamps to 1
+        # ratio ~0.02 -> geometric mean would push below 1, clamps to 1
         estimator.calibrate("t1", real_tokens=100, success=True, alpha=0.5)
         assert estimator.est_cfg.heuristic_safety == 1.0
 
@@ -284,10 +317,10 @@ class TestCalibrate:
 
     def test_uses_config_alpha_by_default(self, estimator):
         wire_repo(estimator, make_task("coding"))
-        estimator.est_cfg.calibration_alpha = 0.1
+        estimator.est_cfg.calibration_alpha = 0.3
         estimator.calibrate("t1", real_tokens=10000, success=True)
-        # 0.9*3000 + 0.1*10000 = 3700
-        assert estimator._base_costs["coding"] == 3700
+        # 0.7 * 4000 + 0.3 * 10000 = 2800 + 3000 = 5800
+        assert estimator._base_costs["coding"] == 5800
 
     def test_p_solvable_clamped(self, estimator):
         wire_repo(estimator, make_task("coding"))
