@@ -1,4 +1,6 @@
 import re
+import sys
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -17,11 +19,68 @@ def normalize_int(s: str) -> Optional[int]:
         return None
 
 
-def check_answer(task: dict, answer_text: str) -> bool:
-    """Check if the agent's answer matches the expected result."""
+def run_unittest(task_dir: Path, timeout: int = 60) -> bool:
+    """Run the task's test suite inside the workspace and report pass/fail.
+
+    Looks for a ``tests/`` directory or ``test_*.py`` files inside the
+    workspace and runs ``pytest`` if available, otherwise ``unittest``.
+    Returns ``True`` only if the runner exits with code 0.
+    """
+    workspace = (task_dir / "workspace").resolve()
+    if not workspace.is_dir():
+        return False
+
+    has_tests = (workspace / "tests").is_dir() or any(
+        workspace.rglob("test_*.py")
+    )
+    if not has_tests:
+        return False
+
+    env = {
+        **__import__("os").environ,
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONPATH": str(workspace),
+    }
+
+    # Prefer pytest if importable in the current interpreter.
+    try:
+        import pytest  # noqa: F401
+        cmd = [sys.executable, "-m", "pytest", "-q", str(workspace)]
+    except ImportError:
+        cmd = [sys.executable, "-m", "unittest", "discover", "-s", str(workspace)]
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=workspace,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return False
+    return proc.returncode == 0
+
+
+def check_answer(
+    task: dict,
+    answer_text: str,
+    task_dir: Optional[Path] = None,
+) -> bool:
+    """Check if the agent's answer matches the expected result.
+
+    For ``check == "unittest"`` the workspace test suite is executed;
+    ``task_dir`` is required in that case.
+    """
     check_type = task.get("check", "exact_str")
     expected = str(task.get("expected", "")).strip()
-    actual = answer_text.strip()
+    actual = (answer_text or "").strip()
+
+    if check_type == "unittest":
+        if task_dir is None:
+            return False
+        return run_unittest(task_dir)
 
     if check_type == "exact_int":
         exp_int = normalize_int(expected)
@@ -110,10 +169,7 @@ class Harness:
             total_output_tokens += output_tokens
 
             if success:
-                if task.get("check") == "unittest":
-                    ok = True
-                else:
-                    ok = check_answer(task, answer)
+                ok = check_answer(task, answer, task_dir)
 
                 if ok:
                     total_reward += reward

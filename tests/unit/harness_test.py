@@ -1,5 +1,6 @@
 import json
-from unittest.mock import AsyncMock, MagicMock
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -77,6 +78,26 @@ class TestCheckAnswer:
     def test_check_answer_default_exact_mismatch(self):
         task = {"expected": "hello"}
         assert check_answer(task, "world") is False
+
+    def test_check_answer_unittest_success(self, tmp_path):
+        task_dir = tmp_path / "task_001"
+        task_dir.mkdir()
+        (task_dir / "workspace").mkdir()
+        task = {"check": "unittest"}
+        with patch("project.harness.run_unittest", return_value=True):
+            assert check_answer(task, "anything", task_dir) is True
+
+    def test_check_answer_unittest_failure(self, tmp_path):
+        task_dir = tmp_path / "task_001"
+        task_dir.mkdir()
+        (task_dir / "workspace").mkdir()
+        task = {"check": "unittest"}
+        with patch("project.harness.run_unittest", return_value=False):
+            assert check_answer(task, "anything", task_dir) is False
+
+    def test_check_answer_unittest_no_task_dir(self):
+        task = {"check": "unittest"}
+        assert check_answer(task, "anything", None) is False
 
 
 class TestHarnessInit:
@@ -318,8 +339,9 @@ class TestHarnessRun:
         assert len(report["results"]) == 2
 
     @pytest.mark.asyncio
-    async def test_run_unittest_task(self, tasks_dir_unittest, mock_config, mock_solver):
-        """Tasks with check='unittest' are always considered successful if solve returns success."""
+    @patch("project.harness.run_unittest", return_value=True)
+    async def test_run_unittest_task(self, mock_run_unittest, tasks_dir_unittest, mock_config, mock_solver):
+        """Tasks with check='unittest' are considered successful if solve returns success and run_unittest passes."""
         harness = Harness(tasks_dir_unittest, mock_config, mock_solver)
         mock_solver.solve.return_value = ("any answer", True, 100, 50)
 
@@ -327,6 +349,7 @@ class TestHarnessRun:
 
         assert report["total_reward"] == 10
         assert report["results"][0]["reward"] == 10
+        mock_run_unittest.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_run_solver_exception(self, tasks_dir_solver_error, mock_config, mock_solver):
