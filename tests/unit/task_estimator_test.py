@@ -73,9 +73,23 @@ def make_task(task_type="coding", instruction="", check="exact_str"):
     return {"task_type": task_type, "instruction": instruction, "check": check}
 
 
-def make_llm_response(content):
+def make_llm_response(content, input_tokens=0, output_tokens=0):
+    """Build a mock response compatible with ``extract_usage``.
+
+    ``extract_usage`` reads ``response.usage_metadata.input_tokens`` and
+    ``response.usage_metadata.output_tokens``.
+
+    Pass ``input_tokens=None, output_tokens=None`` to simulate a response
+    without usage metadata at all.
+    """
     resp = MagicMock()
     resp.content = content
+    if input_tokens is None and output_tokens is None:
+        resp.usage_metadata = None
+    else:
+        resp.usage_metadata = MagicMock()
+        resp.usage_metadata.input_tokens = input_tokens
+        resp.usage_metadata.output_tokens = output_tokens
     return resp
 
 
@@ -98,6 +112,7 @@ class TestEstimateHeuristic:
         assert est.tokens == estimator.est_cfg.default_base
         assert est.p_solvable == estimator.est_cfg.default_p_solvable
         assert est.confidence == 0.1
+        assert est.estimator_cost == 0
 
     def test_basic_estimate(self, estimator):
         wire_repo(estimator, make_task("coding", "x" * 400, "exact_int"))
@@ -107,6 +122,7 @@ class TestEstimateHeuristic:
         assert est.p_solvable == 0.65
         assert est.source == "heuristic"
         assert est.confidence == estimator.est_cfg.heuristic_confidence
+        assert est.estimator_cost == 0
 
     def test_workspace_cost_included(self, estimator, tmp_path):
         ws = tmp_path / "workspace"
@@ -192,12 +208,15 @@ class TestEstimateLLM:
     @pytest.mark.asyncio
     async def test_llm_success(self, estimator):
         wire_repo(estimator, make_task("coding", "do it"))
-        estimator.llm_client.call.return_value = make_llm_response("medium")
+        estimator.llm_client.call.return_value = make_llm_response(
+            "medium", input_tokens=40, output_tokens=2
+        )
         est = await estimator.estimate("t1", depth="llm")
         assert est.source == "llm:medium"
         assert est.tokens == estimator.est_cfg.category_map["medium"][0]
         assert est.p_solvable == estimator.est_cfg.category_map["medium"][1]
         assert est.confidence == estimator.est_cfg.llm_confidence
+        assert est.estimator_cost == 42
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("cat", ["tiny", "small", "medium", "large", "huge"])
@@ -214,13 +233,18 @@ class TestEstimateLLM:
         estimator.llm_client.call.side_effect = RuntimeError("boom")
         est = await estimator.estimate("t1", depth="llm")
         assert est.source == "heuristic"
+        assert est.estimator_cost == 0
 
     @pytest.mark.asyncio
     async def test_llm_fallback_on_unparseable(self, estimator):
         wire_repo(estimator, make_task("coding", "do it"))
         estimator.llm_client.call.return_value = make_llm_response("nonsense")
         est = await estimator.estimate("t1", depth="llm")
-        assert est.source == "heuristic"
+        # unparsed-ответ теперь даёт llm:unparsed, а не heuristic,
+        # чтобы не терять estimator_cost
+        assert est.source == "llm:unparsed"
+        assert est.tokens == estimator.est_cfg.default_base
+        assert est.p_solvable == estimator.est_cfg.default_p_solvable
 
     @pytest.mark.asyncio
     async def test_llm_missing_task(self, estimator):
@@ -239,6 +263,107 @@ class TestEstimateLLM:
         est = await estimator.estimate("t1")
         assert est.source == "heuristic"
         estimator.llm_client.call.assert_not_called()
+
+
+# ----------------------------------------------------------------------
+# Estimator cost (LLM usage accounting)
+# ----------------------------------------------------------------------
+
+class TestEstimatorCost:
+
+    @pytest.mark.asyncio
+    async def test_heuristic_has_zero_cost(self, estimator):
+        wire_repo(estimator, make_task("coding", ""))
+        est = await estimator.estimate("t1", depth="heuristic")
+        assert est.estimator_cost == 0
+
+    @pytest.mark.asyncio
+    async def test_llm_reports_usage(self, estimator):
+        wire_repo(estimator, make_task("coding", "do it"))
+        estimator.llm_client.call.return_value = make_llm_response(
+            "medium", input_tokens=50, output_tokens=3
+        )
+        est = await estimator.estimate("t1", depth="llm")
+        assert est.source == "llm:medium"
+        assert est.estimator_cost == 53
+
+    @pytest.mark.asyncio
+    async def test_llm_missing_usage_metadata_gives_zero(self, estimator):
+        wire_repo(estimator, make_task("coding", "do it"))
+        estimator.llm_client.call.return_value = make_llm_response(
+            "small", input_tokens=None, output_tokens=None
+        )
+        est = await estimator.estimate("t1", depth="llm")
+        assert est.source == "llm:small"
+        assert est.estimator_cost == 0
+
+    @pytest.mark.asyncio
+    async def test_llm_none_usage_fields_treated_as_zero(self, estimator):
+        wire_repo(estimator, make_task("coding", "do it"))
+        resp = MagicMock()
+        resp.content = "small"
+        resp.usage_metadata = MagicMock()
+        resp.usage_metadata.input_tokens = None
+        resp.usage_metadata.output_tokens = None
+        estimator.llm_client.call.return_value = resp
+        est = await estimator.estimate("t1", depth="llm")
+        assert est.estimator_cost == 0
+
+    @pytest.mark.asyncio
+    async def test_llm_failure_zero_cost(self, estimator):
+        wire_repo(estimator, make_task("coding", "do it"))
+        estimator.llm_client.call.side_effect = RuntimeError("boom")
+        est = await estimator.estimate("t1", depth="llm")
+        assert est.source == "heuristic"
+        assert est.estimator_cost == 0
+
+    @pytest.mark.asyncio
+    async def test_unparsed_llm_still_charges_cost(self, estimator):
+        """LLM ответил мусором — вызов всё равно стоил токенов."""
+        wire_repo(estimator, make_task("coding", "do it"))
+        estimator.llm_client.call.return_value = make_llm_response(
+            "nonsense", input_tokens=50, output_tokens=3
+        )
+        est = await estimator.estimate("t1", depth="llm")
+        assert est.source == "llm:unparsed"
+        assert est.estimator_cost == 53
+        assert est.tokens == estimator.est_cfg.default_base
+        assert est.p_solvable == estimator.est_cfg.default_p_solvable
+
+
+# ----------------------------------------------------------------------
+# Safe LLM call wrapper
+# ----------------------------------------------------------------------
+
+class TestSafeLlmCall:
+
+    @pytest.mark.asyncio
+    async def test_returns_content_and_cost(self, estimator):
+        estimator.llm_client.call.return_value = make_llm_response(
+            "small", input_tokens=10, output_tokens=5
+        )
+        content, cost = await estimator._safe_llm_call([])
+        assert content == "small"
+        assert cost == 15
+
+    @pytest.mark.asyncio
+    async def test_returns_none_and_zero_on_exception(self, estimator):
+        estimator.llm_client.call.side_effect = RuntimeError("boom")
+        content, cost = await estimator._safe_llm_call([])
+        assert content is None
+        assert cost == 0
+
+    @pytest.mark.asyncio
+    async def test_missing_content_returns_empty_string(self, estimator):
+        resp = MagicMock()
+        resp.content = None
+        resp.usage_metadata = MagicMock()
+        resp.usage_metadata.input_tokens = 3
+        resp.usage_metadata.output_tokens = 1
+        estimator.llm_client.call.return_value = resp
+        content, cost = await estimator._safe_llm_call([])
+        assert content == ""
+        assert cost == 4
 
 
 # ----------------------------------------------------------------------
@@ -328,6 +453,34 @@ class TestCalibrate:
         estimator.calibrate("t1", real_tokens=1000, success=True, alpha=0.9)
         # would exceed 1.0 without clamping
         assert 0.0 <= estimator.est_cfg.heuristic_p_solvable["coding"] <= 1.0
+
+    def test_calibrate_does_not_touch_estimator_cost(self, estimator):
+        """Estimate — снимок; калибровка не мутирует его поля."""
+        wire_repo(estimator, make_task("coding"))
+        est = Estimate(tokens=5000, p_solvable=0.7, source="heuristic",
+                       confidence=0.4, estimator_cost=123)
+        estimator.calibrate("t1", real_tokens=9999, success=True)
+        assert est.estimator_cost == 123
+
+
+# ----------------------------------------------------------------------
+# Cost accumulation across calls
+# ----------------------------------------------------------------------
+
+class TestEstimatorCostAcrossCalls:
+
+    @pytest.mark.asyncio
+    async def test_multiple_llm_estimates_accumulate(self, estimator):
+        """N вызовов → сумма estimator_cost линейна по числу вызовов."""
+        wire_repo(estimator, make_task("coding", "do it"))
+        estimator.llm_client.call.return_value = make_llm_response(
+            "small", input_tokens=20, output_tokens=5
+        )
+        total = 0
+        for _ in range(3):
+            est = await estimator.estimate("t1", depth="llm")
+            total += est.estimator_cost
+        assert total == 3 * 25
 
 
 # ----------------------------------------------------------------------

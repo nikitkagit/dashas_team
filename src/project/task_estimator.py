@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 from project.config import Config
-from project.llm_client import LLMClient
+from project.llm_client import LLMClient, extract_usage
 from project.task_repo import TaskRepo
 
 
@@ -16,6 +16,8 @@ class Estimate:
     p_solvable: float    # rough probability of successful solve [0..1]
     source: str          # "heuristic" | "llm:<cat>"
     confidence: float    # rough confidence in [0..1]
+    # NEW: сколько токенов ушло на сам вызов эстиматора (0 для heuristic)
+    estimator_cost: int = 0
 
 
 @dataclass
@@ -256,7 +258,6 @@ class TaskEstimator:
     # ------------------------------------------------------------------
 
     async def _llm_estimate(self, task_id: str) -> Optional[Estimate]:
-        """One short LLM call returning a difficulty category."""
         task = self.task_repo.get_task(task_id)
         if task is None:
             return None
@@ -267,13 +268,21 @@ class TaskEstimator:
             {"role": "system", "content": "You classify task difficulty. Reply with exactly one word."},
             {"role": "user", "content": prompt},
         ]
-        content = await self._safe_llm_call(messages)
+        content, est_cost = await self._safe_llm_call(messages)
         if content is None:
             return None
 
         category = self._parse_category(content)
         if category is None:
-            return None
+            # LLM ответил, но не распознан — стоимость всё равно списываем,
+            # иначе она «потеряется» для бюджета
+            return Estimate(
+                tokens=self.est_cfg.default_base,
+                p_solvable=self.est_cfg.default_p_solvable,
+                source="llm:unparsed",
+                confidence=self.est_cfg.heuristic_confidence,
+                estimator_cost=est_cost,
+            )
 
         tokens, p_solvable = self.est_cfg.category_map[category]
         return Estimate(
@@ -281,6 +290,7 @@ class TaskEstimator:
             p_solvable=p_solvable,
             source=f"llm:{category}",
             confidence=self.est_cfg.llm_confidence,
+            estimator_cost=est_cost,
         )
 
     def _build_classification_prompt(self, task: dict, task_dir: Optional[Path]) -> str:
@@ -301,13 +311,15 @@ class TaskEstimator:
     # Shared helpers
     # ------------------------------------------------------------------
 
-    async def _safe_llm_call(self, messages: list[dict]) -> Optional[str]:
-        """Invoke the LLM without tools and return the raw content, or None."""
+    async def _safe_llm_call(self, messages: list[dict]) -> tuple[Optional[str], int]:
+        """Invoke the LLM without tools. Returns (content, total_tokens_used)."""
         try:
             response = await self.llm_client.call(messages, tools=[])
         except Exception:
-            return None
-        return getattr(response, "content", "") or ""
+            return None, 0
+        content = getattr(response, "content", "") or ""
+        in_tok, out_tok = extract_usage(response)
+        return content, in_tok + out_tok
 
     def _list_workspace_files(self, task_dir: Optional[Path]) -> str:
         """List file names and sizes in the workspace (names only, no contents)."""
