@@ -41,11 +41,11 @@ class EstimatorConfig:
     # Tokens are total budgets, including the fixed per-task overhead.
     category_map: dict[str, tuple[int, float]] = field(
         default_factory=lambda: {
-            "tiny": (2500, 0.95),
-            "small": (4000, 0.90),
-            "medium": (8000, 0.75),
-            "large": (16000, 0.55),
-            "huge": (30000, 0.40),
+            "tiny": (3500, 0.95),
+            "small": (6000, 0.90),
+            "medium": (10000, 0.75),
+            "large": (18000, 0.55),
+            "huge": (32000, 0.40),
         }
     )
     category_order: tuple[str, ...] = ("tiny", "small", "medium", "large", "huge")
@@ -130,7 +130,8 @@ class TaskEstimator:
         real_tokens: int,
         success: bool,
         alpha: Optional[float] = None,
-     ) -> None:
+        estimate: Optional["Estimate"] = None,
+    ) -> None:
         """Update the estimator's parameters from an observed solve attempt.
 
         Updates:
@@ -150,7 +151,10 @@ class TaskEstimator:
         a = self.est_cfg.calibration_alpha if alpha is None else alpha
 
         # Snapshot the current estimate BEFORE mutating any config fields.
-        prior_tokens = self._heuristic_estimate(task_id).tokens
+        if estimate is not None:
+            prior_tokens = estimate.tokens
+        else:
+            prior_tokens = self._heuristic_estimate(task_id).tokens
 
         # 1. Per-type base cost (linear EMA on the observed real token count).
         if real_tokens > 0:
@@ -179,11 +183,19 @@ class TaskEstimator:
             current_s = self.est_cfg.heuristic_safety
             updated_s = (current_s ** (1.0 - a)) * (ratio ** a)
             self.est_cfg.heuristic_safety = max(1.0, min(3.0, updated_s))
+            print(
+                f"  [calibrate] {task_id}: prior={prior_tokens} real={real_tokens} "
+                f"ratio={ratio:.2f} safety {current_s:.2f} -> {self.est_cfg.heuristic_safety:.2f}"
+            )
+            print(
+                f"  [CAL] {task_id}: prior={prior_tokens} real={real_tokens} "
+                f"ratio={ratio:.2f} safety {current_s:.2f}->{self.est_cfg.heuristic_safety:.2f}"
+            )
 
     @property
     def base_costs(self) -> dict[str, int]:
         return dict(self._base_costs)
-
+    
     # ------------------------------------------------------------------
     # Layer 0: heuristic
     # ------------------------------------------------------------------
@@ -284,7 +296,10 @@ class TaskEstimator:
                 estimator_cost=est_cost,
             )
 
-        tokens, p_solvable = self.est_cfg.category_map[category]
+        category_tokens, p_solvable = self.est_cfg.category_map[category]
+        # Применяем глобальный калибровочный коэффициент (растёт, если оценщик занижает)
+        tokens = int(category_tokens * self.est_cfg.heuristic_safety)
+
         return Estimate(
             tokens=tokens,
             p_solvable=p_solvable,
@@ -292,6 +307,7 @@ class TaskEstimator:
             confidence=self.est_cfg.llm_confidence,
             estimator_cost=est_cost,
         )
+
 
     def _build_classification_prompt(self, task: dict, task_dir: Optional[Path]) -> str:
         instruction = self._truncate(
@@ -307,6 +323,8 @@ class TaskEstimator:
             "Reply with one word."
         )
 
+
+    
     # ------------------------------------------------------------------
     # Shared helpers
     # ------------------------------------------------------------------

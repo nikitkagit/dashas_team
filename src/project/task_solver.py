@@ -1,3 +1,9 @@
+import sys
+from pathlib import Path #сколько токенов реально
+                        # откуда такие большие цифры
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import json
 from typing import Optional
 
@@ -202,3 +208,29 @@ class TaskSolver:
             return answer_text, True, total_input_tokens, total_output_tokens
 
         return "Max rounds exceeded", False, total_input_tokens, total_output_tokens
+
+if __name__ == "__main__":
+    import asyncio
+    import os
+
+    os.environ.setdefault("API_KEY", "sk-__gjdKkr5rNcW8bhWz-8rA")
+    os.environ.setdefault("MODEL_PROVIDER", "OpenAI")
+
+    # для IDLE: константы; для CLI: sys.argv
+    TASK_ID = sys.argv[1] if len(sys.argv) > 1 else "math_0014"
+    TASKS_DIR = Path(
+        sys.argv[2] if len(sys.argv) > 2
+        else r"C:\projects\dashas_team\src\project\math_0014"
+    )
+
+    async def _run_one():
+        repo = TaskRepo(TASKS_DIR)
+        cfg = Config()
+        client = LLMClient(cfg, cfg.MODEL_ROUTING["math"])
+        solver = TaskSolver(repo, client, cfg)
+        answer, ok, tin, tout = await solver.solve(TASK_ID)
+        print(f"\n=== {TASK_ID} ===")
+        print(f"success={ok}  in={tin}  out={tout}")
+        print(answer)
+
+    asyncio.run(_run_one())

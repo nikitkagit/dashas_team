@@ -32,7 +32,7 @@ from project.task_estimator import EstimatorConfig, TaskEstimator
 from project.task_repo import TaskRepo
 from project.task_solver import TaskSolver
 
-MIN_TASK_BUDGET = 2500  # safety floor; must exceed one-round LLM overhead
+MIN_TASK_BUDGET = 8000  # safety floor; must exceed one-round LLM overhead
 
 
 def load_json_dict(path: Path) -> dict[str, Any]:
@@ -59,11 +59,19 @@ async def run_one(
     check_type = (task or {}).get("check", "exact_str")
     reward = float((task or {}).get("reward", 0) or 0)
 
+    # --- ОЦЕНКА до решения ---
     estimate = await estimator.estimate(tid, depth=estimate_depth)
-
-    # estimate.tokens is a total budget, but enforce a floor so a broken
-    # (e.g. "tiny") estimate still allows one full LLM round to complete.
     budget = max(estimate.tokens, MIN_TASK_BUDGET)
+
+    print(
+        f"[rep {repetition}] [{tid}] ESTIMATE "
+        f"tokens={estimate.tokens} "
+        f"source={estimate.source} "
+        f"p_solvable={estimate.p_solvable:.2f} "
+        f"budget={budget}"
+    )
+
+    # --- РЕШЕНИЕ ---
     answer, completed, in_tok, out_tok = await solver.solve(tid, max_tokens=budget)
     real_tokens = config.normalize_tokens(in_tok, out_tok)
 
@@ -72,17 +80,16 @@ async def run_one(
     else:
         task_ok = False
 
-    # Calibrate ONLY on completed runs. A budget-exceeded or transport-failed
-    # run says nothing about the true task cost or its solvability, and
-    # feeding it back would poison p_solvable and heuristic_safety.
     if completed:
-        estimator.calibrate(tid, real_tokens, task_ok)
+        estimator.calibrate(tid, real_tokens, task_ok, estimate=estimate)
 
+    # --- СРАВНЕНИЕ после решения ---
     ratio = (real_tokens / estimate.tokens) if estimate.tokens else None
     ratio_str = f"{ratio:.2f}" if ratio is not None else "n/a"
     print(
-        f"[rep {repetition}] [{tid}] type={task_type} check={check_type} "
+        f"[rep {repetition}] [{tid}] RESULT   "
         f"est={estimate.tokens} real={real_tokens} ratio={ratio_str} "
+        f"in={in_tok} out={out_tok} "
         f"completed={completed} passed={task_ok}"
     )
 
@@ -146,30 +153,76 @@ def summarize(results: list[dict]) -> dict:
         buckets: dict[str, dict] = {}
         for r in results:
             key = r[field]
-            b = buckets.setdefault(key, {"runs": 0, "passed": 0, "real_tokens": 0})
+            b = buckets.setdefault(key, {
+                "runs": 0, "passed": 0, "completed": 0,
+                "estimated_tokens": 0, "real_tokens": 0,
+            })
             b["runs"] += 1
             b["passed"] += int(r["passed"])
+            b["completed"] += int(r["completed"])
+            b["estimated_tokens"] += r["estimated_tokens"]
             b["real_tokens"] += r["real_tokens"]
         return buckets
 
+    def _per_task() -> dict:
+        """Разбивка токенов по каждой задаче (сумма + среднее на запуск)."""
+        per: dict[str, dict] = {}
+        for r in results:
+            tid = r["task_id"]
+            t = per.setdefault(tid, {
+                "task_type": r["task_type"],
+                "check": r["check"],
+                "runs": 0,
+                "passed": 0,
+                "completed": 0,
+                "estimated_tokens_total": 0,
+                "real_tokens_total": 0,
+                "real_input_tokens_total": 0,
+                "real_output_tokens_total": 0,
+            })
+            t["runs"] += 1
+            t["passed"] += int(r["passed"])
+            t["completed"] += int(r["completed"])
+            t["estimated_tokens_total"] += r["estimated_tokens"]
+            t["real_tokens_total"] += r["real_tokens"]
+            t["real_input_tokens_total"] += r["real_input_tokens"]
+            t["real_output_tokens_total"] += r["real_output_tokens"]
+
+        for t in per.values():
+            n = t["runs"]
+            est = t["estimated_tokens_total"]
+            t["avg_estimated_tokens"] = round(est / n, 1) if n else None
+            t["avg_real_tokens"] = round(t["real_tokens_total"] / n, 1) if n else None
+            t["avg_real_input_tokens"] = round(t["real_input_tokens_total"] / n, 1) if n else None
+            t["avg_real_output_tokens"] = round(t["real_output_tokens_total"] / n, 1) if n else None
+            t["error_ratio"] = round(t["real_tokens_total"] / est, 3) if est else None
+            t["pass_rate"] = round(t["passed"] / n, 3) if n else 0.0
+            t["completed_rate"] = round(t["completed"] / n, 3) if n else 0.0
+        return per
+
     total_est = sum(r["estimated_tokens"] for r in results)
     total_real = sum(r["real_tokens"] for r in results)
-    within_2x = sum(
-        1
-        for r in results
-        if r["error_ratio"] is not None and 0.5 <= r["error_ratio"] <= 2.0
+    ratios = [r["error_ratio"] for r in results if r["error_ratio"] is not None]
+    within_2x = sum(1 for x in ratios if 0.5 <= x <= 2.0)
+    mean_abs_error = (
+        sum(abs(1.0 - x) for x in ratios) / len(ratios) if ratios else None
     )
     completed = sum(1 for r in results if r["completed"])
     passed = sum(1 for r in results if r["passed"])
+
     return {
         "runs": len(results),
         "total_estimated_tokens": total_est,
         "total_real_tokens": total_real,
         "overall_error_ratio": (total_real / total_est) if total_est else None,
+        "mean_abs_error_ratio": mean_abs_error,
         "runs_within_2x": within_2x,
         "completed_rate": completed / len(results),
         "pass_rate": passed / len(results),
         "by_check": _bucketed("check"),
+        "by_task_type": _bucketed("task_type"),
+        "by_source": _bucketed("estimated_source"),
+        "by_task": _per_task(),                      # ← новая секция
     }
 
 
@@ -215,9 +268,11 @@ async def async_main() -> None:
         sys.exit(1)
 
     config = Config()
-    llm_client = LLMClient(config, model_name)
-    estimator = TaskEstimator(repo, llm_client, config, estimator_cfg)
-    solver = TaskSolver(repo, llm_client, config)
+    estimator_client = LLMClient(config, "qwen3.6-35b-a3b-noreason")  # дёшево
+    solver_client    = LLMClient(config, model_name)                  # по routing
+
+    estimator = TaskEstimator(repo, estimator_client, config)
+    solver    = TaskSolver(repo, solver_client, config)
 
     rng = random.Random(args.seed)
 
@@ -253,6 +308,36 @@ async def async_main() -> None:
 
     print("\n=== SUMMARY ===")
     print(json.dumps(summary, indent=2, ensure_ascii=False))
+    by_task = summary.get("by_task", {})
+    if by_task:
+        print("\n=== TOKEN COST PER TASK (normalized) ===")
+        header = (
+            f"{'task_id':<20} {'type':<14} {'check':<10} "
+            f"{'runs':>4} {'est':>8} {'real':>8} {'ratio':>6} "
+            f"{'in':>8} {'out':>6} {'pass':>5}"
+        )
+        print(header)
+        print("-" * len(header))
+        for tid, t in sorted(by_task.items()):
+            ratio = t["error_ratio"]
+            ratio_str = f"{ratio:.2f}" if ratio is not None else "n/a"
+            print(
+                f"{tid:<20} {t['task_type']:<14} {t['check']:<10} "
+                f"{t['runs']:>4} "
+                f"{t['estimated_tokens_total']:>8} "
+                f"{t['real_tokens_total']:>8} "
+                f"{ratio_str:>6} "
+                f"{t['real_input_tokens_total']:>8} "
+                f"{t['real_output_tokens_total']:>6} "
+                f"{t['passed']:>5}"
+            )
+        print("-" * len(header))
+        print(
+            f"{'TOTAL':<20} {'':<14} {'':<10} "
+            f"{summary['runs']:>4} "
+            f"{summary['total_estimated_tokens']:>8} "
+            f"{summary['total_real_tokens']:>8}"
+        )
     print(f"\nFull report: {out_file}")
 
 
