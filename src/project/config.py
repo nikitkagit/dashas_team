@@ -28,6 +28,9 @@ class Config:
         """Build the provider-level client configuration from env vars."""
         self.client_config = self._build_client_config()
 
+        # Read global token budget from environment, default to 100,000
+        self._budget = int(os.environ.get("BUDGET", 100_000))
+
     def _build_client_config(self) -> ModelClientConfig:
         provider = os.getenv("MODEL_PROVIDER", "OpenAI")
         api_key = os.environ.get("LLM_API_KEY")
@@ -51,6 +54,11 @@ class Config:
             api_base=api_base,
             verify_ssl=False,
         )
+
+    @property
+    def budget(self) -> int:
+        """Return the global token budget."""
+        return self._budget
 
     def get_model_name(self, task_type: str) -> Optional[str]:
         """Return the model name configured for a given task type."""
