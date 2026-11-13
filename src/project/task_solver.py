@@ -118,9 +118,7 @@ class TaskSolver:
                         total_output_tokens,
                     )
                 # Convert the remaining normalized budget to an output-token limit.
-                call_max_tokens = max(
-                    1, remaining_normalized // self.config.OUTPUT_TOKEN_WEIGHT
-                )
+                call_max_tokens = max(1, remaining_normalized)
 
             try:
                 response = await self.llm_client.call(
