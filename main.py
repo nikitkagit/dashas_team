@@ -10,6 +10,7 @@ from project.config import Config
 from project.llm_client import LLMClient
 from project.task_repo import TaskRepo
 from project.task_solver import TaskSolver
+from project.task_estimator import TaskEstimator
 
 
 async def async_main() -> None:
@@ -46,8 +47,11 @@ async def async_main() -> None:
     # Create solver with the repo, client, and config
     solver = TaskSolver(repo, llm_client, config)
     
+    #create estimator with repo, client and config
+    estimator = TaskEstimator(repo,llm_client,config)
+    
     # Initialize harness with config and solver
-    harness = Harness(tasks_dir, config, solver)
+    harness = Harness(tasks_dir, config, solver, estimator)
 
     report = await harness.run(task_id=args.task_id)
 
