@@ -37,7 +37,7 @@ class TaskRepo:
 
         for tf in sorted(task_files):
             try:
-                task = json.loads(tf.read_text(encoding="utf-8"))
+                task = json.loads(tf.read_text(encoding="utf-8-sig"))
             except Exception:
                 continue
 
