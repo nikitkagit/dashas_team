@@ -291,7 +291,7 @@ class TestEstimatorCost:
     async def test_llm_missing_usage_metadata_gives_zero(self, estimator):
         wire_repo(estimator, make_task("coding", "do it"))
         estimator.llm_client.call.return_value = make_llm_response(
-            "small", input_tokens=None, output_tokens=None
+            "small", input_tokens=0, output_tokens=0
         )
         est = await estimator.estimate("t1", depth="llm")
         assert est.source == "llm:small"
