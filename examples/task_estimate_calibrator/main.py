@@ -2,23 +2,21 @@
 
 Expected config file (path passed via ``--config``):
   {
+    "tasks_dir": "/abs/path/to/tasks",
     "model": "qwen3.8-27b",
     "repetitions": 3,
     "estimate_depth": "llm",
+    "output_dir": "/tmp/experiment",
     "estimator": { ...optional EstimatorConfig overrides... }
   }
 
-Paths for tasks and output are NOT read from the config:
-  * tasks directory is taken from the required ``--tasks-dir`` CLI argument
-    (matches the Docker invocation: ``python main.py --tasks-dir /data/tasks``);
-  * output directory is taken from the ``OUT`` environment variable
-    (defaults to ``/tmp``), matching the main harness behavior.
+Task IDs are taken from ``TaskRepo(tasks_dir)`` — all ``task.json`` files
+found under ``tasks_dir`` are used.
 
 Usage:
-  python -m examples.task_estimate_calibrator.main --tasks-dir /data/tasks [--config config.json] [--seed 42]
+  python -m project.task_estimate_calibrator.main --config config.json [--seed 42]
 """
 
-import os
 import argparse
 import asyncio
 import json
@@ -26,7 +24,6 @@ import random
 import sys
 from pathlib import Path
 from typing import Any, Optional
-
 
 from project.config import Config
 from project.harness import check_answer
@@ -39,6 +36,7 @@ MIN_TASK_BUDGET = 2500  # safety floor; must exceed one-round LLM overhead
 
 
 def load_json_dict(path: Path) -> dict[str, Any]:
+
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError(f"{path}: expected JSON object")
@@ -183,12 +181,7 @@ async def async_main() -> None:
     parser.add_argument(
         "--config",
         default=str(DEFAULT_CONFIG),
-        help="Path to experiment config JSON (default: config.json next to this file)",
-    )
-    parser.add_argument(
-        "--tasks-dir",
-        required=True,
-        help="Directory containing task subdirectories (e.g. /data/tasks)",
+        help="Path to experiment config JSON (default: config.json)",
     )
     parser.add_argument("--seed", type=int, default=None, help="Random seed")
     args = parser.parse_args()
@@ -200,21 +193,18 @@ async def async_main() -> None:
 
     exp_cfg = load_json_dict(config_path)
 
-    # Tasks directory comes from the CLI argument only.
-    tasks_dir = Path(args.tasks_dir)
+    tasks_dir = Path(exp_cfg["tasks_dir"])
+    if not tasks_dir.is_absolute():
+        tasks_dir = (config_path.resolve().parent / tasks_dir).resolve()
     if not tasks_dir.is_dir():
         print(f"tasks_dir not found: {tasks_dir}", file=sys.stderr)
         sys.exit(1)
 
-    # Output directory comes from the OUT env var, defaulting to /tmp.
-    # This matches the main harness and works under the read-only container
-    # because /tmp is mounted as a writable tmpfs.
-    out_dir = Path(os.environ.get("OUT", "/tmp"))
-    out_dir.mkdir(parents=True, exist_ok=True)
-
     model_name = exp_cfg.get("model", "qwen3.8-27b")
     repetitions = int(exp_cfg.get("repetitions", 1))
     estimate_depth = exp_cfg.get("estimate_depth", "llm")
+    output_dir = Path(exp_cfg.get("output_dir", "/tmp/experiment"))
+    output_dir.mkdir(parents=True, exist_ok=True)
     estimator_overrides = exp_cfg.get("estimator") or {}
     estimator_cfg = EstimatorConfig(**estimator_overrides)
 
@@ -248,7 +238,6 @@ async def async_main() -> None:
         "config": {
             "config_file": str(config_path),
             "tasks_dir": str(tasks_dir),
-            "output_dir": str(out_dir),
             "model": model_name,
             "repetitions": repetitions,
             "estimate_depth": estimate_depth,
@@ -257,14 +246,14 @@ async def async_main() -> None:
         "calibrated_base_costs": estimator.base_costs,
         "results": results,
     }
-    out_file = out_dir / "experiment_results.json"
+    out_file = output_dir / "experiment_results.json"
     out_file.write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
     print("\n=== SUMMARY ===")
     print(json.dumps(summary, indent=2, ensure_ascii=False))
-    print(f"\nFull report saved to: {out_file}")
+    print(f"\nFull report: {out_file}")
 
 
 def main() -> None:
