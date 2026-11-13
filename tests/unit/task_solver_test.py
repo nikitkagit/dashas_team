@@ -318,18 +318,17 @@ async def test_solve_system_prompt_in_first_call(task_repo: TaskRepo, mock_confi
 
 
 @pytest.mark.asyncio
-async def test_solve_max_tokens_budget(task_repo: TaskRepo, mock_config: MockConfig) -> None:
+async def test_solve_max_tokens_budget(task_repo, mock_config):
     """Solver stops and returns failure if max_tokens budget is exceeded."""
-    # Mock returns 10 in, 5 out. Normalized = int(5 + 10/10) = 6.
     mock_llm = MockLLMClient(responses=["The final answer is 42"])
     solver = TaskSolver(task_repo, mock_llm, mock_config)
 
-    # Before call: remaining = 5, call_max_tokens = max(1, 5 // 10) = 1.
-    # After call: used = 6. 6 >= 5 -> fails.
+    # Before call: remaining = 5, call_max_tokens = max(1, 5) = 5.
+    # After call: used = int(5 + 10/10) = 6. 6 >= 5 -> fails.
     answer, success, in_tok, out_tok = await solver.solve("task_001", max_tokens=5)
 
     assert not success
     assert "Max tokens exceeded" in answer
     assert in_tok == 10
     assert out_tok == 5
-    assert mock_llm.calls[0]["max_tokens"] == 1
+    assert mock_llm.calls[0]["max_tokens"] == 5

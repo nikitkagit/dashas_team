@@ -215,7 +215,10 @@ class TestEstimateLLM:
         )
         est = await estimator.estimate("t1", depth="llm")
         assert est.source == "llm:medium"
-        assert est.tokens == estimator.est_cfg.category_map["medium"][0]
+        assert est.tokens == int(
+            estimator.est_cfg.category_map["medium"][0]
+            * estimator.est_cfg.heuristic_safety
+        )
         assert est.p_solvable == estimator.est_cfg.category_map["medium"][1]
         assert est.confidence == estimator.est_cfg.llm_confidence
         assert est.estimator_cost == 6
@@ -227,7 +230,10 @@ class TestEstimateLLM:
         estimator.llm_client.call.return_value = make_llm_response(cat)
         est = await estimator.estimate("t1", depth="llm")
         assert est.source == f"llm:{cat}"
-        assert est.tokens == estimator.est_cfg.category_map[cat][0]
+        assert est.tokens == int(
+            estimator.est_cfg.category_map[cat][0]
+            * estimator.est_cfg.heuristic_safety
+        )
 
     @pytest.mark.asyncio
     async def test_llm_fallback_on_exception(self, estimator):
