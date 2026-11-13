@@ -319,7 +319,7 @@ class TaskEstimator:
             return None, 0
         content = getattr(response, "content", "") or ""
         in_tok, out_tok = extract_usage(response)
-        return content, in_tok + out_tok
+        return content, self.config.normalize_tokens(in_tok, out_tok)
 
     def _list_workspace_files(self, task_dir: Optional[Path]) -> str:
         """List file names and sizes in the workspace (names only, no contents)."""

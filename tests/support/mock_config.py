@@ -18,6 +18,7 @@ class MockConfig(Config):
         self.client_config = None
         self.DEFAULT_TEMPERATURE = 0.1
         self.DEFAULT_MAX_TOKENS = 4096
+        self._budget = 100_000
 
     def get_model_name(self, task_type: str) -> Optional[str]:
         if task_type == "coding":
@@ -28,3 +29,6 @@ class MockConfig(Config):
 
     def get_model_config(self, model_name: str) -> Any:
         return {"model": model_name}
+
+    def normalize_tokens(self, input_tokens: int, output_tokens: int) -> int:
+        return int(output_tokens + input_tokens / self.OUTPUT_TOKEN_WEIGHT)

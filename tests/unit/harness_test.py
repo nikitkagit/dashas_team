@@ -82,6 +82,7 @@ def make_config(model_by_type=None):
         side_effect=lambda t: (model_by_type or {}).get(t, f"model-{t}")
     )
     cfg.token_budget = None
+    cfg.normalize_tokens = lambda i, o: int(o + i / 10)
     return cfg
 
 
@@ -454,6 +455,7 @@ def mock_config():
     config = MagicMock()
     config.get_model_name.return_value = "test-model"
     config.token_budget = None
+    config.normalize_tokens = lambda i, o: int(o + i / 10)
     return config
 
 
@@ -609,7 +611,7 @@ class TestHarnessRun:
         assert report["total_reward"] == 10
         assert report["total_input_tokens"] == 100
         assert report["total_output_tokens"] == 50
-        assert report["total_tokens"] == 150
+        assert report["total_tokens"] == 60
         assert len(report["results"]) == 1
         assert report["results"][0]["task_id"] == "task_001"
         assert report["results"][0]["success"] is True
@@ -673,7 +675,7 @@ class TestHarnessRun:
         assert report["total_reward"] == 30
         assert report["total_input_tokens"] == 300
         assert report["total_output_tokens"] == 150
-        assert report["total_tokens"] == 450
+        assert report["total_tokens"] == 180
         assert len(report["results"]) == 2
 
     @pytest.mark.asyncio
@@ -724,7 +726,7 @@ class TestHarnessExecute:
         rec = await h._execute("t1", task, est, remaining_budget=10_000)
         assert rec["success"] is True
         assert rec["reward"] == 10
-        assert rec["total_tokens"] == 150
+        assert rec["total_tokens"] == 60
         assert rec["estimator_cost"] == 7
         assert rec["est_tokens"] == 500
 
@@ -773,7 +775,7 @@ class TestHarnessExecute:
         spy.assert_called_once()
         args = spy.call_args.args
         assert args[0] == "t1"
-        assert args[2] == 150
+        assert args[2] == 60
         assert args[3] is True
 
 
@@ -829,7 +831,7 @@ class TestHarnessWarmup:
         results = []
         state = {"spent_total": 0, "in": 0, "out": 0, "reward": 0}
         await h._warmup(queue, results, state)
-        assert state["spent_total"] == 33 + 2
+        assert state["spent_total"] == 33 + 1
 
     @pytest.mark.asyncio
     async def test_warmup_skips_unaffordable(self, tmp_path):
@@ -873,8 +875,8 @@ class TestHarnessBudget:
             budget=1_000_000,
         )
         out = await h.run()
-        assert out["total_spent_including_estimator"] == 65
-        assert out["total_tokens"] == 15
+        assert out["total_spent_including_estimator"] == 56
+        assert out["total_tokens"] == 6
 
     @pytest.mark.asyncio
     async def test_run_budget_guard_skips_unaffordable(self, tmp_path):
@@ -927,7 +929,7 @@ class TestHarnessBudget:
         assert out["total_reward"] == 30
         assert out["total_input_tokens"] == 30
         assert out["total_output_tokens"] == 15
-        assert out["total_tokens"] == 45
+        assert out["total_tokens"] == 18
         assert isinstance(out["final_alpha"], float)
 
 
@@ -978,6 +980,6 @@ class TestEndToEndBudget:
         h._warmup = AsyncMock()
         out = await h.run()
         # 50 (classification) + 2 (solve) = 52
-        assert out["total_spent_including_estimator"] == 52
+        assert out["total_spent_including_estimator"] == 51
         # estimate called exactly once for t1: inside plan
         assert estimator._call_counts["t1"] == 1

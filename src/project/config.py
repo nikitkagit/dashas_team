@@ -69,8 +69,5 @@ class Config:
         return ModelRequestConfig(model=model_name)
     
     def normalize_tokens(self, input_tokens: int, output_tokens: int) -> int:
-        """Привести пару (input, output) к единой шкале «входных» токенов.
-
-        1 выходной токен = OUTPUT_TOKEN_WEIGHT входных.
-        """
-        return input_tokens + output_tokens * self.OUTPUT_TOKEN_WEIGHT
+        """Normalize to output tokens: 10 input tokens = 1 output token."""
+        return int(output_tokens + input_tokens / self.OUTPUT_TOKEN_WEIGHT)

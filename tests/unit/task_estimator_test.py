@@ -25,7 +25,9 @@ def mock_llm():
 
 @pytest.fixture
 def mock_config():
-    return MagicMock()
+    cfg = MagicMock()
+    cfg.normalize_tokens = lambda i, o: int(o + i / 10)
+    return cfg
 
 
 @pytest.fixture
@@ -216,7 +218,7 @@ class TestEstimateLLM:
         assert est.tokens == estimator.est_cfg.category_map["medium"][0]
         assert est.p_solvable == estimator.est_cfg.category_map["medium"][1]
         assert est.confidence == estimator.est_cfg.llm_confidence
-        assert est.estimator_cost == 42
+        assert est.estimator_cost == 6
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("cat", ["tiny", "small", "medium", "large", "huge"])
@@ -285,7 +287,7 @@ class TestEstimatorCost:
         )
         est = await estimator.estimate("t1", depth="llm")
         assert est.source == "llm:medium"
-        assert est.estimator_cost == 53
+        assert est.estimator_cost == 8
 
     @pytest.mark.asyncio
     async def test_llm_missing_usage_metadata_gives_zero(self, estimator):
@@ -326,7 +328,7 @@ class TestEstimatorCost:
         )
         est = await estimator.estimate("t1", depth="llm")
         assert est.source == "llm:unparsed"
-        assert est.estimator_cost == 53
+        assert est.estimator_cost == 8
         assert est.tokens == estimator.est_cfg.default_base
         assert est.p_solvable == estimator.est_cfg.default_p_solvable
 
@@ -344,7 +346,7 @@ class TestSafeLlmCall:
         )
         content, cost = await estimator._safe_llm_call([])
         assert content == "small"
-        assert cost == 15
+        assert cost == 6
 
     @pytest.mark.asyncio
     async def test_returns_none_and_zero_on_exception(self, estimator):
@@ -363,7 +365,7 @@ class TestSafeLlmCall:
         estimator.llm_client.call.return_value = resp
         content, cost = await estimator._safe_llm_call([])
         assert content == ""
-        assert cost == 4
+        assert cost == 1
 
 
 # ----------------------------------------------------------------------
@@ -480,7 +482,7 @@ class TestEstimatorCostAcrossCalls:
         for _ in range(3):
             est = await estimator.estimate("t1", depth="llm")
             total += est.estimator_cost
-        assert total == 3 * 25
+        assert total == 3 * 7
 
 
 # ----------------------------------------------------------------------
