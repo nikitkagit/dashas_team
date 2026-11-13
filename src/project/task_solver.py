@@ -195,7 +195,7 @@ class TaskSolver:
             print(
                 f"  [tokens] input={total_input_tokens}, "
                 f"output={total_output_tokens}, "
-                f"total={total_input_tokens + total_output_tokens}"
+                f"total={self.config.normalize_tokens(total_input_tokens, total_output_tokens)}"
             )
 
             # return the answer

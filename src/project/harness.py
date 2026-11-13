@@ -379,7 +379,7 @@ class Harness:
         answer, success, in_tok, out_tok = await self.solver.solve(
             tid, max_tokens=max_tokens
         )
-        spent = in_tok + out_tok
+        spent = self.config.normalize_tokens(in_tok, out_tok)
 
         got_reward = False
         if success and task_dir is not None:
@@ -604,7 +604,7 @@ class Harness:
             "total_reward": state["reward"],
             "total_input_tokens": state["in"],
             "total_output_tokens": state["out"],
-            "total_tokens": state["in"] + state["out"],
+            "total_tokens": self.config.normalize_tokens(state["in"], state["out"]),
             "total_spent_including_estimator": state["spent_total"],
             "results": results,
             "estimator_base_costs": self.estimator.base_costs,
