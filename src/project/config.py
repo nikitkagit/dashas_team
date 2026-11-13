@@ -30,8 +30,8 @@ class Config:
 
     def _build_client_config(self) -> ModelClientConfig:
         provider = os.getenv("MODEL_PROVIDER", "OpenAI")
-        api_key = os.environ.get("API_KEY")
-        api_base = "https://api.neuraldeep.ru/v1"
+        api_key = os.environ.get("LLM_API_KEY")
+        api_base = os.environ.get("LLM_BASE_URL")
 
         if not api_key:
             sys.exit(
