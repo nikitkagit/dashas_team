@@ -47,12 +47,6 @@ async def async_main() -> None:
 
     # Solver does the actual per-task work.
     solver = TaskSolver(repo, llm_client, config)
-    
-    #create estimator with repo, client and config
-    estimator = TaskEstimator(repo,llm_client,config)
-    
-    # Initialize harness with config and solver
-    harness = Harness(tasks_dir, config, solver, estimator)
 
     # Budget comes from Config (BUDGET env var, default 100k).
     harness = Harness(
