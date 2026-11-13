@@ -29,10 +29,10 @@ class EstimatorConfig:
     # schemas ≈ 1500 normalized tokens for one LLM call).
     base_costs: dict[str, int] = field(
         default_factory=lambda: {
-            "coding": 4000,
-            "math": 2500,
-            "data_analysis": 3000,
-            "search": 2000,
+            "coding": 518,
+            "math": 463,
+            "data_analysis": 710,
+            "search": 508,
         }
     )
     default_base: int = 2500
@@ -53,10 +53,10 @@ class EstimatorConfig:
     # Heuristic p_solvable per task type.
     heuristic_p_solvable: dict[str, float] = field(
         default_factory=lambda: {
-            "coding": 0.65,
-            "math": 0.75,
-            "data_analysis": 0.70,
-            "search": 0.85,
+            "coding": 0.99,
+            "math": 0.99,
+            "data_analysis": 0.99,
+            "search": 0.99,
         }
     )
     default_p_solvable: float = 0.60
