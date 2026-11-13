@@ -196,6 +196,19 @@ class TaskEstimator:
     def base_costs(self) -> dict[str, int]:
         return dict(self._base_costs)
     
+    def get_calibrated_config(self) -> dict:
+        """Return all dynamically calibrated parameters as a serializable dictionary.
+        
+        This output is designed to be copied directly into a configuration file
+        to persist the learned estimates across different runs.
+        """
+        return {
+            "base_costs": dict(self._base_costs),
+            "heuristic_p_solvable": dict(self.est_cfg.heuristic_p_solvable),
+            "default_p_solvable": round(self.est_cfg.default_p_solvable, 4),
+            "heuristic_safety": round(self.est_cfg.heuristic_safety, 4),
+        }
+    
     # ------------------------------------------------------------------
     # Layer 0: heuristic
     # ------------------------------------------------------------------

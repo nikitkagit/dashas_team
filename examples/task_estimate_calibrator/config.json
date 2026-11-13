@@ -1,8 +1,8 @@
 {
-  "tasks_dir": "C:/projects/dashas_team/tasks",
+  "tasks_dir": "data/tasks",
   "model": "qwen3.8-27b",
   "repetitions": 1,
   "estimate_depth": "llm",
-  "output_dir": "C:/projects/dashas_team/out",
+  "output_dir": "out",
   "estimator": {}
 }

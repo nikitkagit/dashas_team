@@ -340,6 +340,18 @@ async def async_main() -> None:
         )
     print(f"\nFull report: {out_file}")
 
+    print("\n=== CALIBRATED ESTIMATOR CONFIG (for config.json) ===")
+    calibrated_config = estimator.get_calibrated_config()
+    print(json.dumps(calibrated_config, indent=2, ensure_ascii=False))
+    
+    # Optional: automatically save it to a file in the output directory
+    config_out_file = output_dir / "calibrated_estimator_config.json"
+    config_out_file.write_text(
+        json.dumps(calibrated_config, indent=2, ensure_ascii=False), 
+        encoding="utf-8"
+    )
+    print(f"Saved to: {config_out_file}")
+
 
 def main() -> None:
     asyncio.run(async_main())
