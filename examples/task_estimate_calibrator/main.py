@@ -78,11 +78,6 @@ async def run_one(
     if completed:
         estimator.calibrate(tid, real_tokens, task_ok)
 
-    # Calibrate the estimator on the observed outcome (task_ok, not just
-    # "loop finished" — otherwise unittest failures would train p_solvable
-    # in the wrong direction).
-    estimator.calibrate(tid, real_tokens, task_ok)
-
     ratio = (real_tokens / estimate.tokens) if estimate.tokens else None
     ratio_str = f"{ratio:.2f}" if ratio is not None else "n/a"
     print(
