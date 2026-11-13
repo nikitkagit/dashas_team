@@ -10,11 +10,8 @@ Expected config file (path passed via ``--config``):
     "estimator": { ...optional EstimatorConfig overrides... }
   }
 
-Task IDs are taken from ``TaskRepo(tasks_dir)`` — all ``task.json`` files
-found under ``tasks_dir`` are used.
-
 Usage:
-  python -m project.task_estimate_calibrator.main --config config.json [--seed 42]
+  python -m examples.task_estimate_calibrator.main [--tasks-dir /data/tasks] [--config config.json] [--seed 42]
 """
 
 import argparse
@@ -36,7 +33,6 @@ MIN_TASK_BUDGET = 2500  # safety floor; must exceed one-round LLM overhead
 
 
 def load_json_dict(path: Path) -> dict[str, Any]:
-
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError(f"{path}: expected JSON object")
@@ -183,6 +179,11 @@ async def async_main() -> None:
         default=str(DEFAULT_CONFIG),
         help="Path to experiment config JSON (default: config.json)",
     )
+    parser.add_argument(
+        "--tasks-dir",
+        default=None,
+        help="Override tasks_dir from config (e.g., /data/tasks)",
+    )
     parser.add_argument("--seed", type=int, default=None, help="Random seed")
     args = parser.parse_args()
 
@@ -193,7 +194,9 @@ async def async_main() -> None:
 
     exp_cfg = load_json_dict(config_path)
 
-    tasks_dir = Path(exp_cfg["tasks_dir"])
+    tasks_dir_str = args.tasks_dir or exp_cfg.get("tasks_dir", "/data/tasks")
+    tasks_dir = Path(tasks_dir_str)
+    
     if not tasks_dir.is_absolute():
         tasks_dir = (config_path.resolve().parent / tasks_dir).resolve()
     if not tasks_dir.is_dir():
@@ -253,7 +256,7 @@ async def async_main() -> None:
 
     print("\n=== SUMMARY ===")
     print(json.dumps(summary, indent=2, ensure_ascii=False))
-    print(f"\nFull report: {out_file}")
+    print(f"\nFull report saved to: {out_file}")
 
 
 def main() -> None:
